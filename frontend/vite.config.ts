@@ -9,5 +9,5 @@ export default defineConfig({
   // A local tool: one ~200 kB (gzip) bundle is fine, no code splitting needed.
   build: { outDir: "../src/agentprof/server/static", emptyOutDir: true, chunkSizeWarningLimit: 1000 },
   server: { proxy: { "/api": "http://127.0.0.1:8765" } },
-  test: { include: ["src/**/*.test.ts"] },
+  test: { include: ["src/**/*.test.ts"], globalSetup: ["./vitest.global-setup.ts"] },
 });

@@ -247,7 +247,7 @@ test("orphan results stay visible as one invocation with Start unavailable", () 
   const html = render(node, null, null, new Map([["expand-tools:owner:standalone", ["invocation:orphan"]]]));
   expect(html).toContain('data-testid="tool-execution-owner-invocation:orphan"');
   expect(html).toContain("<dt>Started</dt><dd>Unavailable");
-  expect(html).toContain("<dt>Finished</dt><dd>1/1/70, 1:00 AM");
+  expect(html).toContain("<dt>Finished</dt><dd>1/1/70, 12:00 AM");
 });
 
 test("event identity helpers use stable refs and snapshot-local keys for ambiguous IDs", () => {
