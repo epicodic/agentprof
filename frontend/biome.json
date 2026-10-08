@@ -1,0 +1,6 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.5.14/schema.json",
+  "files": { "includes": ["**", "!src/api/schema.ts", "!openapi.json", "!test-results", "!playwright-report"] },
+  "formatter": { "indentStyle": "space", "lineWidth": 120 },
+  "linter": { "enabled": true, "rules": { "preset": "recommended" } }
+}

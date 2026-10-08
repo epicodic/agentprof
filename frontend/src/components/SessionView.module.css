@@ -1,0 +1,125 @@
+/* SPDX-License-Identifier: MIT */
+/* Copyright (c) 2026 epicodic */
+
+.page {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: var(--mantine-spacing-sm);
+  height: 100dvh;
+  min-width: 0;
+  min-height: 0;
+  padding: 16px;
+  overflow: hidden;
+}
+
+.headerArea {
+  min-width: 0;
+}
+
+.mobilePanels {
+  display: none;
+}
+
+.workspace {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  grid-template-rows: calc(var(--tree-percent, 75%) - 4px) 8px minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.workspace[data-bottom-open="false"] {
+  grid-template-rows: minmax(0, 1fr) 0 auto;
+}
+
+.treePane,
+.agentsPane {
+  min-width: 0;
+  min-height: 0;
+}
+
+.agentsPane {
+  display: flex;
+  flex-direction: column;
+}
+
+.agentsContent {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+}
+
+.workspace[data-bottom-open="false"] .agentsContent {
+  display: none;
+}
+
+.splitter {
+  background: var(--mantine-color-default-border);
+  cursor: row-resize;
+  touch-action: none;
+}
+
+@media (max-width: 48em) {
+  .page {
+    gap: 8px;
+    padding: 8px;
+  }
+
+  .headerArea {
+    max-height: 40dvh;
+    overflow-y: auto;
+    overflow-x: hidden;
+  }
+
+  .headerArea :global(.mantine-Group-root) {
+    flex-wrap: wrap;
+    min-width: 0;
+  }
+
+  .headerArea :global(.mantine-Title-root),
+  .headerArea :global(.mantine-Text-root) {
+    overflow-wrap: anywhere;
+  }
+
+  .mobilePanels {
+    display: flex;
+    gap: 8px;
+    min-width: 0;
+  }
+
+  .mobilePanels button {
+    flex: 1;
+    min-width: 0;
+    min-height: 44px;
+  }
+
+  .workspace {
+    display: block;
+    overflow: hidden;
+  }
+
+  .treePane,
+  .agentsPane {
+    width: 100%;
+    height: 100%;
+  }
+
+  .workspace[data-mobile-panel="agents"] .treePane,
+  .workspace[data-mobile-panel="workflow"] .agentsPane {
+    display: none;
+  }
+
+  .agentsContent {
+    padding: 0;
+    display: flex;
+  }
+
+  .splitter,
+  .desktopAgentTab {
+    display: none;
+  }
+}

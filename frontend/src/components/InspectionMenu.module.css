@@ -1,0 +1,41 @@
+/* SPDX-License-Identifier: MIT */
+.menu {
+  position: fixed;
+  z-index: 10000;
+  min-width: 190px;
+  max-width: min(320px, calc(100vw - 16px));
+  max-height: calc(100dvh - 16px);
+  overflow: auto;
+  padding: 4px;
+  border: 1px solid var(--mantine-color-default-border);
+  border-radius: var(--mantine-radius-sm);
+  background: var(--mantine-color-body);
+  box-shadow: var(--mantine-shadow-md);
+}
+
+.item {
+  display: block;
+  width: 100%;
+  min-height: 36px;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: var(--mantine-radius-xs);
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+}
+
+.item:hover,
+.item:focus-visible {
+  background: var(--mantine-color-default-hover);
+  outline: 2px solid var(--mantine-color-blue-6);
+  outline-offset: -2px;
+}
+
+@media (max-width: 48em) {
+  .item {
+    min-height: 44px;
+  }
+}

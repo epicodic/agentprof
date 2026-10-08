@@ -1,0 +1,102 @@
+/* SPDX-License-Identifier: MIT */
+/* Copyright (c) 2026 epicodic */
+
+.page {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.filters,
+.pagination {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.tableScroll {
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+}
+
+.titleCell {
+  min-width: 0;
+}
+
+.fullValue {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.fullValue summary {
+  cursor: pointer;
+}
+
+.expandedValue {
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.errorDisclosure {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.errorDisclosure summary {
+  min-width: 44px;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+}
+
+.errorDisclosure > :not(summary) {
+  max-width: min(320px, 80vw);
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.agentFilter {
+  min-width: 0;
+  max-width: 100%;
+}
+
+@media (max-width: 48em) {
+  .filters {
+    display: flex;
+    flex-wrap: wrap;
+  }
+
+  .filters > * {
+    min-width: 0;
+    max-width: 100%;
+    flex: 1 1 180px;
+  }
+
+  .filters :global([data-grouped]) {
+    overflow-x: auto;
+  }
+
+  .phoneSorting {
+    display: flex;
+    flex-wrap: wrap;
+  }
+
+  .agentFilter {
+    overflow-x: auto;
+  }
+
+  .phoneSorting > * {
+    min-width: 150px;
+    max-width: 100%;
+    flex: 1 1 150px;
+  }
+
+  .tableScroll table {
+    min-width: 900px;
+  }
+
+  .pagination {
+    flex-wrap: wrap;
+  }
+}

@@ -1,0 +1,81 @@
+name: CI
+
+on:
+  workflow_call:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: checks (Python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.12", "3.14"]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.2.0
+        with:
+          python-version: ${{ matrix.python }}
+          enable-cache: true
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+      - name: Enable pnpm
+        run: corepack enable pnpm
+        env:
+          COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
+      - name: Install dependencies
+        run: |
+          uv sync
+          pnpm --dir frontend install --frozen-lockfile
+      - name: Quality checks
+        run: uv run qa
+      - name: Generated API types are current
+        run: |
+          pnpm --dir frontend gen:api
+          git diff --exit-code -- frontend/src/api/schema.ts
+      - name: End-to-end test
+        run: |
+          pnpm --dir frontend exec playwright install --with-deps chromium
+          pnpm --dir frontend e2e
+      - name: Build distributions
+        run: uv run build-dist
+      - name: Upload distributions
+        if: matrix.python == '3.12'
+        uses: actions/upload-artifact@v7
+        with:
+          name: dist
+          path: dist/
+
+  smoke:
+    name: smoke (${{ matrix.os }})
+    needs: checks
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.2.0
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist
+      - name: Install the tooling
+        run: uv sync
+      - name: Smoke-test the wheel
+        run: uv run smoke dist

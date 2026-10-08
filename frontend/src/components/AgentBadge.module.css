@@ -1,0 +1,31 @@
+.capsule {
+  --agent-hue: 0;
+
+  align-items: center;
+  background: hsl(var(--agent-hue) 55% 45%);
+  border-radius: var(--mantine-radius-xl);
+  color: white;
+  display: inline-flex;
+  font-size: var(--mantine-font-size-xs);
+  font-weight: 600;
+  justify-content: center;
+  line-height: 18px;
+  min-width: 30px;
+  padding: 0 6px;
+}
+
+.active {
+  animation: active-pulse 1s ease-in-out infinite;
+}
+
+@keyframes active-pulse {
+  50% {
+    opacity: 0.3;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .active {
+    animation: none;
+  }
+}

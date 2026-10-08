@@ -1,0 +1,95 @@
+/* SPDX-License-Identifier: MIT */
+/* Copyright (c) 2026 epicodic */
+
+.toolbar {
+  display: flex;
+  align-items: end;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.toolbar label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 140px;
+  font-size: 12px;
+}
+
+.toolbar select {
+  max-width: min(32vw, 320px);
+  min-height: 32px;
+  min-width: 0;
+}
+
+.toolbar button {
+  min-height: 32px;
+}
+
+.followNote {
+  display: block;
+  flex: 1 0 100%;
+  height: 1.5em;
+  overflow: hidden;
+  font-size: var(--mantine-font-size-xs);
+  line-height: 1.5em;
+  white-space: nowrap;
+}
+
+.ancestry {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.ancestry ol {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 18px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ancestry li {
+  position: relative;
+  min-width: 0;
+}
+
+.ancestry li + li::before {
+  position: absolute;
+  left: -12px;
+  content: "›";
+  color: var(--mantine-color-dimmed);
+}
+
+@media (max-width: 48em) {
+  .toolbar {
+    align-items: stretch;
+  }
+
+  .toolbar label,
+  .toolbar button {
+    flex: 1 1 145px;
+    min-width: 0;
+    min-height: 44px;
+  }
+
+  .toolbar select {
+    max-width: 100%;
+    min-height: 44px;
+  }
+
+  .ancestry li a {
+    display: inline-flex;
+    min-height: 44px;
+    align-items: center;
+  }
+
+  .ancestry {
+    max-height: 128px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scroll-margin-block: 8px;
+  }
+}

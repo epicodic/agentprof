@@ -1,0 +1,46 @@
+.item,
+.bar {
+  cursor: default;
+}
+
+.item[data-selection="exact"] {
+  background: var(--mantine-color-blue-light);
+}
+
+.item:focus-visible {
+  outline: 2px solid var(--mantine-color-blue-6);
+}
+
+.selectButton {
+  min-width: 44px;
+  min-height: 44px;
+}
+
+.treeSelectButton {
+  min-width: 40px;
+  min-height: 22px;
+}
+
+.bar[data-selection="exact"] {
+  background-color: var(--mantine-color-blue-light);
+}
+
+.bar:disabled {
+  opacity: 0.45;
+}
+
+.timelineCall {
+  background: transparent;
+  --timeline-hit-min: 6px;
+  min-width: var(--timeline-hit-min);
+}
+
+.timelinePaint[data-selection="exact"] {
+  background-color: var(--mantine-color-blue-light);
+}
+
+@media (max-width: 48em) {
+  .timelineCall {
+    --timeline-hit-min: 12px;
+  }
+}

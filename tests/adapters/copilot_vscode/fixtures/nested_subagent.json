@@ -1,0 +1,88 @@
+{
+    "responderUsername": "GitHub Copilot",
+    "initialLocation": "panel",
+    "requests": [
+        {
+            "requestId": "request_nested",
+            "message": {
+                "parts": [
+                    {
+                        "kind": "text",
+                        "text": "test nested"
+                    }
+                ],
+                "text": "test nested"
+            },
+            "response": [
+                {
+                    "kind": "toolInvocationSerialized",
+                    "invocationMessage": "Nested subagent test A",
+                    "isConfirmed": {
+                        "type": 1
+                    },
+                    "isComplete": true,
+                    "source": {
+                        "type": "internal",
+                        "label": "Built-In"
+                    },
+                    "toolCallId": "call_a",
+                    "toolId": "runSubagent",
+                    "toolSpecificData": {
+                        "kind": "subagent",
+                        "description": "Nested subagent test A",
+                        "prompt": "dispatch B",
+                        "modelName": "Claude Sonnet 5",
+                        "result": "A done",
+                        "credits": 10.0
+                    }
+                },
+                {
+                    "kind": "toolInvocationSerialized",
+                    "invocationMessage": "Nested subagent test B",
+                    "isConfirmed": {
+                        "type": 1
+                    },
+                    "isComplete": true,
+                    "source": {
+                        "type": "internal",
+                        "label": "Built-In"
+                    },
+                    "toolCallId": "call_b",
+                    "toolId": "runSubagent",
+                    "subAgentInvocationId": "call_a",
+                    "toolSpecificData": {
+                        "kind": "subagent",
+                        "description": "Nested subagent test B",
+                        "prompt": "do work",
+                        "modelName": "Claude Sonnet 5",
+                        "result": "B done",
+                        "credits": 6.68046
+                    }
+                }
+            ],
+            "agent": {
+                "id": "github.copilot.editsAgent"
+            },
+            "timestamp": 1790180000000,
+            "modelId": "copilot/claude-sonnet-5",
+            "responseId": "response_nested",
+            "result": {
+                "timings": {
+                    "firstProgress": 50,
+                    "totalElapsed": 2000
+                },
+                "metadata": {
+                    "toolCallRounds": [],
+                    "sessionId": "793f5e4f-8674-445c-b689-1505fb2bf112",
+                    "agentId": "github.copilot.editsAgent"
+                }
+            },
+            "responseTimestamp": 1790180000000,
+            "timeSpentWaiting": 0,
+            "promptTokens": 500,
+            "completionTokens": 50,
+            "copilotCredits": 20.0,
+            "elapsedMs": 2000
+        }
+    ]
+}

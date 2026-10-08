@@ -1,0 +1,67 @@
+[project]
+name = "agentprof"
+version = "0.1.0"
+description = "Analyse AI coding agent sessions: call trees, timings, tokens, cost and waste."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.12"
+authors = [{ name = "epicodic" }]
+keywords = ["ai", "agents", "copilot", "claude-code", "llm", "tokens", "cost", "observability"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Web Environment",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Software Development :: Quality Assurance",
+]
+dependencies = ["fastapi>=0.120", "uvicorn>=0.38"]
+
+[project.scripts]
+agentprof = "agentprof.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/epicodic/agentprof"
+Repository = "https://github.com/epicodic/agentprof"
+Issues = "https://github.com/epicodic/agentprof/issues"
+
+[project.entry-points."agentprof.adapters"]
+claude-code = "agentprof.adapters.claude_code.adapter:ClaudeCodeAdapter"
+codex = "agentprof.adapters.codex.adapter:CodexAdapter"
+copilot-vscode = "agentprof.adapters.copilot_vscode.adapter:CopilotVscodeAdapter"
+
+[build-system]
+requires = ["uv_build>=0.11.6,<0.12"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "agentprof-qa",
+    "httpx2>=2.13",
+    "pytest>=8.3",
+    "ruff>=0.16.8",
+    "ty>=0.0.83",
+]
+
+[tool.uv.workspace]
+members = ["tools/qa"]
+
+[tool.uv.sources]
+agentprof-qa = { workspace = true }
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+src = ["src", "tests", "tools/qa/src"]
+extend-exclude = ["docs", ".agents"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = ["--import-mode=importlib"]

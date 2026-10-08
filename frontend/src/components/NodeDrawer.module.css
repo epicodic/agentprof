@@ -1,0 +1,68 @@
+/* SPDX-License-Identifier: MIT */
+/* Copyright (c) 2026 epicodic */
+
+.shell {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+.tabs {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.tabList {
+  flex-shrink: 0;
+}
+
+.panel {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  overflow-wrap: anywhere;
+}
+
+.widthControl {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
+@media (max-width: 48em) {
+  .tabList {
+    flex-wrap: nowrap;
+  }
+
+  .tabList button {
+    min-height: 44px;
+    padding-inline: 10px;
+  }
+
+  .panel {
+    padding-inline: 2px;
+  }
+
+  .shell summary {
+    min-height: 44px;
+    cursor: pointer;
+  }
+}
+
+.chartsScroll {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.chartsSurface {
+  min-width: 500px;
+}
+
+.shell summary {
+  cursor: pointer;
+  font-weight: 600;
+}

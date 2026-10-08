@@ -1,0 +1,348 @@
+/* SPDX-License-Identifier: MIT */
+/* Copyright (c) 2026 epicodic */
+
+.mobileMetrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 8px;
+}
+
+.mobileMetrics dt {
+  font-size: 11px;
+  color: var(--mantine-color-dimmed);
+}
+
+.mobileMetrics dd {
+  margin: 0;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.topicAction {
+  min-height: 44px;
+  flex: 0 0 auto;
+}
+
+.eventContent,
+.eventDescription {
+  min-width: 0;
+}
+
+.eventMetrics {
+  min-width: 0;
+}
+
+.eventId {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.eventAction {
+  min-width: 0;
+  min-height: 24px;
+  height: auto;
+  padding-inline: 8px;
+  white-space: normal;
+}
+
+.calls button.callAction {
+  min-width: 0;
+  min-height: 24px;
+  height: auto;
+  padding: 2px 6px;
+}
+
+.callActions {
+  flex: 0 0 auto;
+}
+
+.timeColumn {
+  width: 170px;
+}
+
+.actionColumn {
+  width: 36px;
+}
+
+.offsetColumn {
+  width: 75px;
+}
+
+.durationColumn {
+  width: 72px;
+}
+
+.costColumn,
+.inputColumn {
+  width: 60px;
+}
+
+.cacheReadColumn,
+.cacheWriteColumn,
+.write5mColumn,
+.write1hColumn,
+.outputColumn {
+  width: 65px;
+}
+
+.eventColumn {
+  width: 70px;
+}
+
+.childTableContainer {
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.children .topic {
+  min-width: 0;
+  flex: 1;
+}
+
+@media (min-width: 48.001em) {
+  .children {
+    table-layout: fixed;
+    min-width: 900px;
+    overflow-wrap: normal;
+  }
+
+  .children .modelColumn {
+    width: 140px;
+  }
+
+  .children .offsetColumn {
+    width: 95px;
+  }
+
+  .children .durationColumn {
+    width: 100px;
+  }
+
+  .children .tokensColumn {
+    width: 80px;
+  }
+
+  .children .costColumn {
+    width: 145px;
+  }
+
+  .children > thead > tr > th,
+  .children > tbody > tr > td[data-label]:not([data-label="Topic"]):not([data-label="Model"]) {
+    white-space: nowrap;
+  }
+}
+
+.calls th,
+.calls td {
+  padding-inline: 4px;
+}
+
+.calls th button {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+@media (max-width: 48em) {
+  .table,
+  .table > tbody {
+    display: block;
+    width: 100%;
+  }
+
+  .table > thead {
+    display: none;
+  }
+
+  .table > tbody > tr {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    padding-block: 8px;
+    border-bottom: 1px solid var(--mantine-color-default-border);
+  }
+
+  .table > tbody > tr > td {
+    display: block;
+    min-width: 0;
+    padding: 4px;
+    text-align: left;
+    overflow-wrap: anywhere;
+  }
+
+  .table > tbody > tr > td[data-label]::before {
+    content: attr(data-label);
+    display: block;
+    font-size: 11px;
+    color: var(--mantine-color-dimmed);
+  }
+
+  .table > tbody > tr > td[data-detail] {
+    grid-column: 1 / -1;
+  }
+
+  .table button {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  .calls > tbody > tr > td[data-label="Since start"],
+  .calls > tbody > tr > td[data-token] {
+    display: none;
+  }
+
+  .calls > tbody > tr > td[data-label="Time"] {
+    grid-column: 1 / -1;
+  }
+
+  .calls .timeColumn,
+  .calls .offsetColumn,
+  .calls .metricColumn,
+  .calls .eventColumn {
+    width: auto;
+  }
+
+  .calls .durationColumn,
+  .calls .costColumn,
+  .calls .inputColumn,
+  .calls .cacheReadColumn,
+  .calls .cacheWriteColumn,
+  .calls .write5mColumn,
+  .calls .write1hColumn,
+  .calls .outputColumn {
+    width: auto;
+  }
+
+  .calls > tbody > tr > td.eventSinceStart {
+    display: block;
+    grid-column: 1 / -1;
+  }
+
+  .calls > tbody > tr > td[data-event-content] {
+    grid-column: 1 / -1;
+  }
+
+  .calls .eventAction {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  .calls button.callAction {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  .topic {
+    white-space: normal;
+    -webkit-line-clamp: unset;
+    overflow-wrap: anywhere;
+  }
+}
+
+/* Calls keep single-line summary rows at every viewport size. */
+.calls > tbody > tr:has(> td[data-label]) {
+  height: 30px;
+}
+
+.calls > tbody > tr > td[data-label] {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.calls > tbody > tr > td[data-label] p {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.calls > tbody > tr > td[data-label="Item"] p {
+  min-width: 0;
+  flex: 1;
+}
+
+.calls > tbody > tr > td[data-detail] {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.calls .timeColumn {
+  width: 210px;
+}
+
+@media (max-width: 48em) {
+  .table.calls {
+    display: table;
+    min-width: 640px;
+  }
+
+  .calls > thead {
+    display: table-header-group;
+  }
+
+  .calls > tbody {
+    display: table-row-group;
+  }
+
+  .calls > tbody > tr {
+    display: table-row;
+    padding-block: 0;
+  }
+
+  .calls > tbody > tr > td {
+    display: table-cell;
+    padding: 2px 4px;
+    overflow-wrap: normal;
+  }
+
+  .calls > tbody > tr > td[data-label]::before {
+    display: none;
+  }
+
+  .calls > tbody > tr > td[data-detail] {
+    overflow-wrap: anywhere;
+  }
+
+  .calls > tbody > tr > td[data-detail] > * {
+    max-width: calc(100vw - 44px);
+  }
+
+  .calls > tbody > tr > td[data-label] button {
+    min-width: 18px;
+    min-height: 18px;
+  }
+
+  .calls .timeColumn {
+    width: 210px;
+  }
+
+  .calls .durationColumn {
+    width: 72px;
+  }
+
+  .calls .costColumn {
+    width: 60px;
+  }
+}
+
+/* Item takes remaining space; numeric columns align with their headings. */
+.calls .durationColumn {
+  width: 90px;
+}
+
+.calls .costColumn {
+  width: 110px;
+}
+
+.calls .tokensColumn {
+  width: 90px;
+}
+
+.calls > tbody > tr > td:is([data-label="Duration"], [data-label="Cost"], [data-label="Tokens"]),
+.calls > tbody > tr > td:is([data-label="Duration"], [data-label="Cost"], [data-label="Tokens"]) p {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}

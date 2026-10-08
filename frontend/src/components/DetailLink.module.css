@@ -1,0 +1,17 @@
+/* SPDX-License-Identifier: MIT */
+/* Copyright (c) 2026 epicodic */
+
+.link {
+  color: var(--mantine-color-anchor);
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.link:hover {
+  text-decoration: underline;
+}
+
+.link:focus-visible {
+  outline: 2px solid var(--mantine-color-blue-6);
+  outline-offset: 1px;
+}

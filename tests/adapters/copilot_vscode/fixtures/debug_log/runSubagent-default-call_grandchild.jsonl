@@ -1,0 +1,2 @@
+{"v": 1, "ts": 1060, "dur": 0, "sid": "call_grandchild", "type": "session_start", "name": "session_start", "spanId": "session-start-call_grandchild", "status": "ok", "attrs": {"copilotVersion": "0.66.0", "vscodeVersion": "1.138.0", "parentSessionId": "root_session", "label": "runSubagent-default"}}
+{"ts": 1070, "dur": 5, "sid": "call_grandchild", "type": "llm_request", "name": "chat:claude-sonnet-5", "spanId": "span_llm_grandchild_1", "attrs": {"model": "claude-sonnet-5", "debugName": "tool/runSubagent", "inputTokens": 20000, "outputTokens": 100, "cachedTokens": 5000}}

@@ -1,0 +1,149 @@
+{
+    "responderUsername": "GitHub Copilot",
+    "initialLocation": "panel",
+    "requests": [
+        {
+            "requestId": "request_001",
+            "message": {
+                "parts": [
+                    {
+                        "kind": "text",
+                        "text": "do the thing"
+                    }
+                ],
+                "text": "do the thing"
+            },
+            "response": [
+                {
+                    "kind": "toolInvocationSerialized",
+                    "invocationMessage": "Reading foo.py",
+                    "isConfirmed": {
+                        "type": 1
+                    },
+                    "isComplete": true,
+                    "source": {
+                        "type": "internal",
+                        "label": "Built-In"
+                    },
+                    "toolCallId": "call_read_main",
+                    "toolId": "copilot_readFile"
+                },
+                {
+                    "kind": "toolInvocationSerialized",
+                    "invocationMessage": "Dispatch Activity Lead",
+                    "isConfirmed": {
+                        "type": 1
+                    },
+                    "isComplete": true,
+                    "source": {
+                        "type": "internal",
+                        "label": "Built-In"
+                    },
+                    "toolCallId": "call_lead",
+                    "toolId": "runSubagent",
+                    "toolSpecificData": {
+                        "kind": "subagent",
+                        "description": "Dispatch Activity Lead",
+                        "prompt": "You are the lead...",
+                        "modelName": "Claude Sonnet 5",
+                        "result": "Done.",
+                        "credits": 12.5
+                    }
+                },
+                {
+                    "kind": "toolInvocationSerialized",
+                    "invocationMessage": "Inventory files",
+                    "isConfirmed": {
+                        "type": 1
+                    },
+                    "isComplete": true,
+                    "source": {
+                        "type": "internal",
+                        "label": "Built-In"
+                    },
+                    "toolCallId": "call_exec",
+                    "toolId": "execution_subagent",
+                    "subAgentInvocationId": "call_lead"
+                },
+                {
+                    "kind": "toolInvocationSerialized",
+                    "invocationMessage": "Reading bar.py",
+                    "isConfirmed": {
+                        "type": 1
+                    },
+                    "isComplete": true,
+                    "source": {
+                        "type": "internal",
+                        "label": "Built-In"
+                    },
+                    "toolCallId": "call_read_child",
+                    "toolId": "copilot_readFile",
+                    "subAgentInvocationId": "call_exec"
+                },
+                {
+                    "kind": "toolInvocationSerialized",
+                    "invocationMessage": "Running `ls`",
+                    "isConfirmed": {
+                        "type": 1
+                    },
+                    "isComplete": true,
+                    "source": {
+                        "type": "internal",
+                        "label": "Built-In"
+                    },
+                    "toolCallId": "call_term_child",
+                    "toolId": "run_in_terminal",
+                    "subAgentInvocationId": "call_exec"
+                }
+            ],
+            "agent": {
+                "id": "github.copilot.editsAgent"
+            },
+            "timestamp": 1790123020238,
+            "modelId": "copilot/claude-sonnet-5",
+            "responseId": "response_001",
+            "result": {
+                "timings": {
+                    "firstProgress": 100,
+                    "totalElapsed": 5000
+                },
+                "metadata": {
+                    "toolCallRounds": [
+                        {
+                            "response": "",
+                            "toolCalls": [
+                                {
+                                    "id": "call_read_main",
+                                    "name": "read_file",
+                                    "arguments": "{\"filePath\": \"foo.py\"}"
+                                }
+                            ],
+                            "id": "round_0",
+                            "timestamp": 1790123020300
+                        },
+                        {
+                            "response": "",
+                            "toolCalls": [
+                                {
+                                    "id": "call_lead",
+                                    "name": "runSubagent",
+                                    "arguments": "{}"
+                                }
+                            ],
+                            "id": "round_1",
+                            "timestamp": 1790123021000
+                        }
+                    ],
+                    "sessionId": "session_basic_001",
+                    "agentId": "github.copilot.editsAgent"
+                }
+            },
+            "responseTimestamp": 1790123020238,
+            "timeSpentWaiting": 0,
+            "promptTokens": 1000,
+            "completionTokens": 200,
+            "copilotCredits": 42.0,
+            "elapsedMs": 5000
+        }
+    ]
+}

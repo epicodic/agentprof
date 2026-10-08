@@ -1,0 +1,68 @@
+/* SPDX-License-Identifier: MIT */
+/* Copyright (c) 2026 epicodic */
+
+.header,
+.identityRow,
+.identity,
+.figures {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.identityRow,
+.identity,
+.controls,
+.figures {
+  flex-wrap: wrap;
+}
+
+.title {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.sessionsLink {
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+}
+
+.warnings {
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 48em) {
+  .identityRow {
+    align-items: flex-start;
+  }
+
+  .identity,
+  .controls {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .identity {
+    flex: 1 1 100%;
+  }
+
+  .controls {
+    flex: 1 1 100%;
+  }
+
+  .controls > * {
+    min-height: 44px;
+  }
+
+  .figures {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px 12px;
+  }
+
+  .figures > * {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+}

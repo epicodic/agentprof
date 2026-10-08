@@ -1,0 +1,179 @@
+/* SPDX-License-Identifier: MIT */
+/* Copyright (c) 2026 epicodic */
+
+.root {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.phoneControls,
+.cards {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.cards {
+  display: block;
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.cards :global(tbody),
+.cards :global(tr),
+.cards :global(td) {
+  display: block;
+  width: 100%;
+}
+
+.phoneControls {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+}
+
+.phoneControls > * {
+  flex: 1 1 145px;
+  min-width: 0;
+}
+
+.activityColumn {
+  min-width: 96px;
+  white-space: nowrap;
+}
+
+.card {
+  min-width: 0;
+  width: 100%;
+  margin: 0;
+  border-radius: var(--mantine-radius-sm);
+  border: 1px solid var(--mantine-color-default-border);
+  overflow-wrap: anywhere;
+}
+
+.card :global(td) {
+  padding: 0 10px;
+  border: 0;
+}
+
+.cardIdentity,
+.cardState {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 6px;
+}
+
+.cardTopic,
+.cardState > div {
+  min-width: 0;
+}
+
+.card :global(a) {
+  display: inline-block;
+  min-height: 44px;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  align-content: center;
+}
+
+.cardState {
+  margin-top: 6px;
+}
+
+.card .cardIdentity {
+  padding-top: 10px;
+}
+
+.card .metricsDisclosureCell {
+  padding-bottom: 10px;
+}
+
+.metricsDisclosure {
+  position: relative;
+  display: block;
+  width: 100%;
+  min-width: 0;
+  padding-top: 44px;
+}
+
+.metricsDisclosure summary {
+  position: absolute;
+  z-index: 2;
+  top: 0;
+  left: 0;
+  min-height: 44px;
+  width: 44px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.disclosureTriangle {
+  display: inline-grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  font-size: 12px;
+}
+
+.metricsDisclosure[open] .disclosureTriangle {
+  transform: rotate(90deg);
+}
+
+.metricList {
+  min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
+  margin: 0;
+}
+
+.metricList > div {
+  display: grid;
+  grid-template-columns: minmax(110px, 0.8fr) minmax(0, 1fr);
+  gap: 8px;
+  padding: 5px 0;
+  border-top: 1px solid var(--mantine-color-default-border);
+}
+
+.metricList dt {
+  color: var(--mantine-color-dimmed);
+}
+
+.metricList dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.metricsDisclosureRow {
+  position: relative;
+  min-width: 0;
+  min-height: 44px;
+  width: 100%;
+}
+
+.metricsCaption {
+  position: absolute;
+  z-index: 1;
+  top: 0;
+  left: 52px;
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  right: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.screenReaderOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}

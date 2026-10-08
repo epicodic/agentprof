@@ -1,0 +1,20 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+.serena/
+.agents
+
+# Virtual environments
+.venv
+
+# Frontend
+frontend/node_modules/
+frontend/openapi.json
+frontend/test-results/
+frontend/playwright-report/
+src/agentprof/server/static/

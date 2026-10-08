@@ -1,0 +1,211 @@
+/* SPDX-License-Identifier: MIT */
+/* Copyright (c) 2026 epicodic */
+
+.tree {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.metricsViewport {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.metricsContent {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  min-width: 1100px;
+  height: 100%;
+}
+
+.header {
+  display: grid;
+  grid-template-columns: minmax(280px, 3fr) 50px 140px 90px 110px 80px 80px minmax(200px, 2fr);
+  align-items: end;
+  border-bottom: 1px solid var(--mantine-color-default-border);
+}
+
+.rowsScroll {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+.rowsCanvas {
+  position: relative;
+}
+
+.row {
+  position: absolute;
+  right: 0;
+  left: 0;
+  display: grid;
+  grid-template-columns: minmax(280px, 3fr) 50px 140px 90px 110px 80px 80px minmax(200px, 2fr);
+  align-items: center;
+  border-bottom: 1px solid var(--mantine-color-default-border);
+  border-left: 2px solid transparent;
+  padding: 0 12px;
+  cursor: default;
+}
+
+.topic {
+  min-width: 0;
+  overflow: hidden;
+  padding-left: min(var(--row-indent), 96px);
+}
+
+.inlineStatus {
+  min-width: 0;
+}
+
+.phoneMeta,
+.phoneCosts {
+  display: none;
+}
+
+.metricCell {
+  min-width: 0;
+}
+
+.activityCell {
+  min-width: 0;
+}
+
+.track {
+  width: 100%;
+}
+
+.phoneAxis {
+  display: none;
+}
+
+@media (max-width: 48em) {
+  .metricsViewport {
+    overflow: hidden;
+  }
+
+  .phoneAxis {
+    display: block;
+    flex: 0 0 auto;
+    min-width: 0;
+    padding: 8px 12px;
+  }
+
+  .metricsContent {
+    min-width: 0;
+  }
+
+  .header {
+    display: none;
+  }
+
+  .rowsScroll {
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
+
+  .row {
+    box-sizing: border-box;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: 44px 28px 22px 44px;
+    gap: 4px;
+    height: 176px;
+    padding: 8px;
+    overflow: hidden;
+  }
+
+  .topic {
+    grid-row: 1;
+    height: 44px;
+    padding-left: min(var(--row-indent), 24px);
+  }
+
+  .topic > div {
+    height: 44px;
+    max-width: 100%;
+  }
+
+  .topic a {
+    display: inline-flex;
+    align-items: center;
+    min-width: 0;
+    min-height: 44px;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .topic button {
+    width: 44px;
+    height: 44px;
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  .inlineStatus,
+  .metricCell {
+    display: none;
+  }
+
+  .phoneMeta,
+  .phoneCosts {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    gap: 8px;
+    overflow: hidden;
+    font-size: 11px;
+    line-height: 14px;
+  }
+
+  .phoneMeta {
+    grid-row: 2;
+    display: grid;
+    grid-template-rows: 14px 18px;
+    align-content: center;
+    gap: 0;
+    white-space: nowrap;
+  }
+
+  .phoneMeta > span:nth-child(2) {
+    display: flex;
+    min-width: 0;
+    gap: 8px;
+    white-space: nowrap;
+  }
+
+  .phoneMeta > span:nth-child(2) > span {
+    flex: 0 0 auto;
+  }
+
+  .phoneCosts {
+    grid-row: 3;
+    justify-content: space-between;
+    white-space: nowrap;
+  }
+
+  .activityCell {
+    grid-row: 4;
+    min-width: 0;
+    height: 44px;
+    align-self: stretch;
+    display: flex;
+    align-items: center;
+  }
+
+  .track {
+    height: 44px;
+  }
+}
