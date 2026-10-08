@@ -24,7 +24,7 @@ Everything runs locally, so your sessions never leave your machine.
 - **Node details**: open any turn or agent to see its timeline, cost per LLM call, context chart, subagents and a searchable list of LLM and tool calls, down to the raw prompt, result and tool arguments.
 - **Waste findings**: hints, not verdicts, about where time and money may have gone (see [Findings](#findings)).
 - **Live updates**: the session list fills in within seconds, and open sessions update while an agent is still working.
-- **Local JSON API**: everything in the UI is also available as JSON, so you can script your own reports.
+- **JSON API for AI agents**: everything in the UI is also available as compact JSON, so an AI agent can analyse sessions itself, including how the agents and subagents in them worked together.
 
 ![Node details with timeline, cost per LLM call, context growth, subagents and LLM calls](https://media.githubusercontent.com/media/epicodic/agentprof/main/docs/images/node-details.png)
 
@@ -99,9 +99,28 @@ Each finding is attached to the turn or agent it is about, and the session heade
 | Idle parents | A parent agent idling after a child agent completed. |
 | Context jumps | Context that grew sharply between two calls. |
 
-## Local API
+## Local API for AI agents
 
-While agentprof runs, its data is available as JSON on the same port:
+agentprof is useful to people, and just as useful to AI agents.
+While it runs, everything it knows about a session is available as JSON on the same port, so you can point an agent at a session and ask it what went wrong, why a run was expensive or how its subagents worked together.
+
+The API is built for this:
+
+- **Self-describing**: [`/api`](http://127.0.0.1:8765/api/) lists every endpoint with its parameters, and each session page links to its JSON, so a URL from the browser is enough to start with.
+  `/sessions/{id}?format=json` returns the same data as the API route.
+- **Agent by agent**: `/summary` gives one row per agent with its parent agent, so the delegation tree can be rebuilt without the full call tree.
+  Each row has the agent's topic, models, LLM calls, peak context, tokens, cache TTL, resumes, longest gap, its own cost and the cost of everything it delegated.
+- **Findings first**: `/findings` puts the likely waste with the highest estimated cost first.
+- **Bounded downloads**: `depth` and `fields` cut a large call tree down to what fits in a context window; prompts, results and tool arguments are only fetched for the node that needs them.
+- **Honest numbers**: every value says whether it is `exact`, `estimated` or `n/a`, so an agent can tell measurements from guesses.
+
+For example, ask your agent:
+
+```text
+agentprof is running on http://127.0.0.1:8765. Start at /api, open session
+claude-code:<id> and explain which subagents drove the cost, where they
+waited for each other, and what we could do differently next time.
+```
 
 | Endpoint | Returns |
 |---|---|
@@ -110,8 +129,9 @@ While agentprof runs, its data is available as JSON on the same port:
 | `/api/sessions` | All sessions, newest first |
 | `/api/sessions/events` | Server-sent events for session list updates |
 | `/api/sessions/{id}` | The full call tree with metrics and findings; `depth` and `fields=session,diagnostics,tree` bound a large download |
-| `/api/sessions/{id}/summary` | One compact row per agent, with cost and cache breakdowns |
+| `/api/sessions/{id}/summary` | One compact row per agent, with its parent, cost and cache breakdowns |
 | `/api/sessions/{id}/findings` | Findings, ordered by estimated avoidable cost, severity and time |
+| `/api/sessions/{id}/nodes/{node_id}` | Prompt, result and raw tool arguments of one node |
 | `/api/sessions/{id}/diagnostics` | Parse counts and redacted details of malformed lines |
 | `/api/pricing` | The effective price table and its model matching rule |
 
