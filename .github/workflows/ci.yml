@@ -31,7 +31,9 @@ jobs:
         with:
           node-version-file: .nvmrc
       - name: Enable pnpm
-        run: corepack enable pnpm
+        run: |
+          corepack enable pnpm
+          corepack install -g "$(jq -r .packageManager frontend/package.json)"
         env:
           COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
       - name: Install dependencies
