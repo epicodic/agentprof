@@ -12,7 +12,7 @@ describe("buildWorkflowIndex", () => {
     const root = deepWorkflow(3, 2);
     const index = buildWorkflowIndex(root);
     const scope = resolveWorkflowScope(index, "deep-1");
-    const result = workflowVisibility(index, scope.root.node_id, "running", false);
+    const result = workflowVisibility(index, scope.root.node_id, "running");
     expect([...result.matches]).toEqual(["deep-3"]);
     expect(result.visible).toEqual(new Set(["deep-1", "deep-2", "deep-3"]));
     expect(result.contextOnly.has("deep-1")).toBe(true);
@@ -60,7 +60,7 @@ describe("buildWorkflowIndex", () => {
     expect(workflowAncestors(index, "buried").map((node) => node.node_id)).toEqual(["root", "tool", "buried"]);
     expect(index.observations.get("tool")).toMatchObject({ status: "unknown", evidence: "unavailable" });
     expect(resolveWorkflowScope(index, "tool")).toEqual({ root, unavailable: true });
-    expect(workflowVisibility(index, "root", "all", false).visible).toEqual(new Set(["root"]));
+    expect(workflowVisibility(index, "root", "all").visible).toEqual(new Set(["root"]));
   });
 
   it("resolves absent and valid root scopes while marking unknown scopes unavailable", () => {
@@ -71,31 +71,12 @@ describe("buildWorkflowIndex", () => {
     expect(resolveWorkflowScope(index, "missing")).toEqual({ root, unavailable: true });
   });
 
-  it("intersects direct activity and finding matches before adding contextual ancestors", () => {
-    const root = deepWorkflow(2);
-    const parent = root.children[0].children[0];
-    parent.findings = [
-      {
-        heuristic_id: "W1",
-        node_id: parent.node_id,
-        severity: "low",
-        message: "finding",
-        evidence: {},
-        estimated_avoidable_cost: { value: null, unit: null, usd: null, provenance: "n/a" },
-      },
-    ];
-    const index = buildWorkflowIndex(root);
-    const result = workflowVisibility(index, "session", "running", true);
-    expect(result.matches).toEqual(new Set());
-    expect(result.visible).toEqual(new Set());
-  });
-
   it("treats tools, unknown IDs, and missing scopes as whole-session fallback", () => {
     const root = deepWorkflow(1);
     const index = buildWorkflowIndex(root);
     expect(resolveWorkflowScope(index, "sibling-tool").root).toBe(root);
     expect(resolveWorkflowScope(index, "unknown").root).toBe(root);
-    expect(workflowVisibility(index, "missing", "all", false).visible.size).toBe(4);
-    expect(workflowVisibility(index, "deep-0", "failed", false).visible).toEqual(new Set());
+    expect(workflowVisibility(index, "missing", "all").visible.size).toBe(4);
+    expect(workflowVisibility(index, "deep-0", "failed").visible).toEqual(new Set());
   });
 });

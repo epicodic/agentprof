@@ -408,9 +408,8 @@ test("drawer parent returns a nested sub-agent to its calling agent", async ({ p
   await expect(page.getByTestId("tree-row-toolu_agent1")).toHaveAttribute("aria-selected", "true");
 });
 
-test("reveal a finding with the findings filter on", async ({ page }) => {
+test("reveal a finding from the findings drawer", async ({ page }) => {
   await page.goto(`/sessions/${encodeURIComponent(SESSION)}`);
-  await page.getByLabel("Only rows with findings").click();
   await page.getByRole("button", { name: /Findings \(\d+\)/ }).click();
   const finding = page.getByTestId("finding-W4-u2");
   await finding.click();

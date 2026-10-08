@@ -768,36 +768,6 @@ test("reveals an initially selected deep call while keeping the requested drawer
   expect(new URL(page.url()).searchParams.get("owner")).toBe("toolu_agent1");
 });
 
-test("marking does not clear the findings filter or reveal a hidden row", async ({ page }) => {
-  await page.route(`**/api/sessions/${encodeURIComponent(SESSION)}`, async (route) => {
-    const response = await route.fetch();
-    const session = (await response.json()) as SessionOut;
-    const turn = selectionTurn(session);
-    session.root.children.push({
-      ...structuredClone(turn),
-      node_id: "selection-hidden",
-      topic: "Selection hidden by findings filter",
-      kind: "agent",
-      findings: [],
-      children: [],
-      llm_calls: [],
-    });
-    await route.fulfill({ response, json: session });
-  });
-
-  await page.goto(sessionUrl({ sel: "node", entity: "selection-hidden" }));
-  await expect(page.getByTestId("tree-row-selection-hidden")).toBeVisible();
-  const filter = page.getByRole("switch", { name: "Only rows with findings" });
-  await filter.check();
-  await expect(page.getByTestId("tree-row-selection-hidden")).toHaveCount(0);
-  const tree = page.getByRole("grid", { name: "Call tree" });
-  await expect(tree.getByRole("status")).toHaveCount(0);
-  await expect(tree.getByRole("button", { name: "Reveal selection" })).toHaveCount(0);
-  expect(new URL(page.url()).searchParams.get("entity")).toBe("selection-hidden");
-  await expect(filter).toBeChecked();
-  await expect(page.getByTestId("tree-row-selection-hidden")).toHaveCount(0);
-});
-
 test("marks a removed selected call unavailable without selecting its neighbor", async ({ page }) => {
   const fixture: { current: SessionOut | null } = { current: null };
   await installSelectionEventSource(page);

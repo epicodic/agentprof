@@ -21,8 +21,6 @@ test("shows estimated session cost without an API-equivalent label", () => {
         createElement(SessionHeader, {
           session: makeSession(root),
           findingCount: 0,
-          findingsOnly: false,
-          onFindingsOnly: () => {},
           onOpenFindings: () => {},
         }),
       ),
@@ -45,8 +43,6 @@ test("shows independent source, fetch and observation freshness timestamps", () 
         createElement(SessionHeader, {
           session,
           findingCount: 0,
-          findingsOnly: false,
-          onFindingsOnly: () => {},
           onOpenFindings: () => {},
           fetchedAtMs: 1_760_000_001_000,
           latestObservedAtMs: 1_760_000_002_000,
@@ -78,8 +74,6 @@ test("marks missing freshness timestamps unavailable independently", () => {
         createElement(SessionHeader, {
           session: makeSession(makeNode({ node_id: "session", kind: "session" }), 0),
           findingCount: 0,
-          findingsOnly: false,
-          onFindingsOnly: () => {},
           onOpenFindings: () => {},
           fetchedAtMs: Number.NaN,
           latestObservedAtMs: null,
@@ -100,8 +94,6 @@ test("marks missing freshness timestamps unavailable independently", () => {
         createElement(SessionHeader, {
           session: makeSession(makeNode({ node_id: "session", kind: "session" }), 1_760_000_000),
           findingCount: 0,
-          findingsOnly: false,
-          onFindingsOnly: () => {},
           onOpenFindings: () => {},
           fetchedAtMs: 8.64e15 + 1,
           latestObservedAtMs: null,

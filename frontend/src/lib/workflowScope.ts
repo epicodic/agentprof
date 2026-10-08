@@ -2,7 +2,7 @@
 // Copyright (c) 2026 epicodic
 
 import type { NodeOut } from "../api/types";
-import { isRowNode, rowFindingCount } from "./tree";
+import { isRowNode } from "./tree";
 import {
   type ActivityFilter,
   type ObservedItem,
@@ -108,7 +108,6 @@ export function workflowVisibility(
   index: WorkflowIndex,
   scopeId: string,
   activity: ActivityFilter,
-  findingsOnly: boolean,
 ): WorkflowVisibility {
   const scope = resolveWorkflowScope(index, scopeId).root;
   const matches = new Set<string>();
@@ -117,7 +116,7 @@ export function workflowVisibility(
     const node = pending.pop();
     if (node === undefined || !isRowNode(node)) continue;
     const activityMatches = activity === "all" || index.observations.get(node.node_id)?.status === activity;
-    if (activityMatches && (!findingsOnly || rowFindingCount(node) > 0)) matches.add(node.node_id);
+    if (activityMatches) matches.add(node.node_id);
     for (let i = node.children.length - 1; i >= 0; i -= 1) pending.push(node.children[i]);
   }
 

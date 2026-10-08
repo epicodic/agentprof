@@ -276,7 +276,6 @@ The session list keeps native row navigation without local marking, details icon
 | `inspectionLocation.selection` | selected `EntityRef`, either a node or a call identified by its owner and stable call key |
 | `inspectionLocation.invalidSelection` | URL selection fields were present but invalid, so the UI reports it unavailable until cleared |
 | `SessionInteraction` | context exposing inspection, resolved selection, navigation actions, reveal actions and in-memory session state |
-| `findingsOnly` | show only nodes with findings and their ancestors |
 | `workflowLocation` | `scope` hierarchy root and `activity` filter from the URL, independent of inspection and selection |
 | `workflowIndex` | one indexed tree traversal with node, parent, depth, own-state, and logical-agent observations |
 | `scopeOnly` | session-local switch limiting the agent list to logical agents represented inside a valid focused subtree |

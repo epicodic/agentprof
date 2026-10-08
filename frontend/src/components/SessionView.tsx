@@ -54,7 +54,6 @@ const SPLIT_STORAGE_KEY = "agentprof:session-workspace-split";
 interface HistorySnapshot {
   memory: Map<string, unknown>;
   expanded: string[];
-  findingsOnly: boolean;
   range: [number, number];
   treeScrollTop: number;
   workflowAnchor: WorkflowAnchor | null;
@@ -112,7 +111,6 @@ export function SessionView({ session, fetchedAtMs }: { session: SessionOut; fet
   const [expanded, setExpanded] = useState<Set<string>>(
     () => new Set([...initialExpansion(root), ...initialRevealKeys]),
   );
-  const [findingsOnly, setFindingsOnly] = useState(false);
   const [pendingScope, setPendingScope] = useState(workflowLocation.scopeId ?? root.node_id);
   const [mobilePanel, setMobilePanel] = useState<"workflow" | "agents">("workflow");
   const [scopeOnly, setScopeOnly] = useState(false);
@@ -196,9 +194,8 @@ export function SessionView({ session, fetchedAtMs }: { session: SessionOut; fet
         workflowIndex,
         scopeRoot.node_id,
         workflowLocation.invalidActivity ? "all" : workflowLocation.activity,
-        findingsOnly,
       ),
-    [findingsOnly, scopeRoot.node_id, workflowIndex, workflowLocation.activity, workflowLocation.invalidActivity],
+    [scopeRoot.node_id, workflowIndex, workflowLocation.activity, workflowLocation.invalidActivity],
   );
   const selectedOutsideWorkflow =
     resolved !== null && selectedWorkflowRow !== null && !workflowView.visible.has(selectedWorkflowRow);
@@ -283,7 +280,6 @@ export function SessionView({ session, fetchedAtMs }: { session: SessionOut; fet
     historySnapshots.current.set(routerLocation.key, {
       memory: new Map(memory),
       expanded: [...expanded],
-      findingsOnly,
       range: [...range],
       treeScrollTop: treeScrollRef.current?.scrollTop ?? 0,
       workflowAnchor: workflowAnchorRef.current,
@@ -292,17 +288,7 @@ export function SessionView({ session, fetchedAtMs }: { session: SessionOut; fet
       mobilePanel,
       scopeOnly,
     });
-  }, [
-    expanded,
-    findingsOnly,
-    inspectionRequest,
-    memory,
-    mobilePanel,
-    range,
-    rememberCurrentTab,
-    routerLocation.key,
-    scopeOnly,
-  ]);
+  }, [expanded, inspectionRequest, memory, mobilePanel, range, rememberCurrentTab, routerLocation.key, scopeOnly]);
   const saveSnapshotRef = useRef(saveSnapshot);
   saveSnapshotRef.current = saveSnapshot;
 
@@ -532,7 +518,6 @@ export function SessionView({ session, fetchedAtMs }: { session: SessionOut; fet
         for (const [key, value] of snapshot.memory) memory.set(key, value);
         setInspectionRequest(snapshot.inspectionRequest);
         setExpanded(new Set(snapshot.expanded));
-        setFindingsOnly(snapshot.findingsOnly);
         setMobilePanel(snapshot.mobilePanel);
         setScopeOnly(snapshot.scopeOnly);
         setRange([...snapshot.range]);
@@ -738,13 +723,6 @@ export function SessionView({ session, fetchedAtMs }: { session: SessionOut; fet
     },
     [pauseFollow],
   );
-  const changeFindingsOnly = useCallback(
-    (enabled: boolean) => {
-      pauseFollow();
-      setFindingsOnly(enabled);
-    },
-    [pauseFollow],
-  );
   const changeMobilePanel = useCallback(
     (panel: "workflow" | "agents") => {
       pauseFollow();
@@ -776,8 +754,6 @@ export function SessionView({ session, fetchedAtMs }: { session: SessionOut; fet
               fetchedAtMs={fetchedAtMs}
               latestObservedAtMs={latestObservedAtMs}
               findingCount={findings.length}
-              findingsOnly={findingsOnly}
-              onFindingsOnly={changeFindingsOnly}
               onOpenFindings={() => {
                 pauseFollow();
                 setFindingsOpen(true);
@@ -830,11 +806,6 @@ export function SessionView({ session, fetchedAtMs }: { session: SessionOut; fet
               {(workflowLocation.invalidActivity || workflowLocation.activity !== "all") && (
                 <button type="button" onClick={() => navigateWorkflow({ activity: "all" }, true)}>
                   Clear activity filter
-                </button>
-              )}
-              {findingsOnly && (
-                <button type="button" onClick={() => setFindingsOnly(false)}>
-                  Turn off findings filter
                 </button>
               )}
             </Box>

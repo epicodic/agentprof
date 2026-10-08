@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 epicodic
 
-import { Alert, Anchor, Badge, Button, Group, Stack, Switch, Text, Title } from "@mantine/core";
+import { Alert, Anchor, Badge, Button, Group, Stack, Text, Title } from "@mantine/core";
 import { Link } from "react-router";
 import type { SessionOut } from "../api/types";
 import {
@@ -22,8 +22,6 @@ interface Props {
   fetchedAtMs?: number;
   latestObservedAtMs?: number | null;
   findingCount: number;
-  findingsOnly: boolean;
-  onFindingsOnly: (value: boolean) => void;
   onOpenFindings: () => void;
 }
 
@@ -62,15 +60,7 @@ function warningsOf(session: SessionOut): string[] {
   return warnings;
 }
 
-export function SessionHeader({
-  session,
-  fetchedAtMs,
-  latestObservedAtMs,
-  findingCount,
-  findingsOnly,
-  onFindingsOnly,
-  onOpenFindings,
-}: Props) {
+export function SessionHeader({ session, fetchedAtMs, latestObservedAtMs, findingCount, onOpenFindings }: Props) {
   const root = session.root;
   const warnings = warningsOf(session);
   return (
@@ -91,12 +81,6 @@ export function SessionHeader({
           ))}
         </Group>
         <Group gap="xs" className={classes.controls}>
-          <Switch
-            size="xs"
-            label="Only rows with findings"
-            checked={findingsOnly}
-            onChange={(event) => onFindingsOnly(event.currentTarget.checked)}
-          />
           <Button size="xs" variant="light" color="orange" onClick={onOpenFindings} disabled={findingCount === 0}>
             Findings ({findingCount})
           </Button>
