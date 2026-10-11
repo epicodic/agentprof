@@ -19,6 +19,7 @@ _CATEGORIES: dict[str, ToolCategory] = {
 
 # Built-in harness tools without a dedicated category; they map to `other` but are not reported as unknown.
 _KNOWN_OTHER_TOOL_IDS = {
+    "resume_agent",
     "collaboration.followup_task",
     "collaboration.send_message",
     "collaboration.wait_agent",

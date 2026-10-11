@@ -9,7 +9,7 @@ from agentprof.adapters.codex.rollout import Rollout, ToolCall, Turn, UsageRecor
 from agentprof.adapters.codex.tools import tool_info
 from agentprof.adapters.execution import tool_execution_events
 from agentprof.adapters.turns import split_by_turn
-from agentprof.model import CostMetric, ExecutionEvent, LlmCall, Metric, Node, NodeKind, Tokens
+from agentprof.model import CostMetric, ExecutionEvent, LlmCall, Metric, Node, NodeKind, Tokens, iter_nodes
 from agentprof.pricing import PriceTable, Usage
 
 _ENCRYPTED_HANDOVER = "Handover unavailable: Codex stored it encrypted."
@@ -37,6 +37,14 @@ def _usage(usage: UsageRecord) -> Usage:
     )
 
 
+def usage_cost(prices: PriceTable, model: str | None, usage: UsageRecord) -> CostMetric:
+    """Estimate API-equivalent cost only when every disjoint pricing count is available."""
+    fields = ("input_tokens", "cached_input_tokens", "cache_write_input_tokens", "output_tokens")
+    if not all(usage.has_field(name) for name in fields):
+        return CostMetric.not_available()
+    return prices.cost(model, _usage(usage))
+
+
 def _llm_calls(turn: Turn, prices: PriceTable, source_stream_id: str | None = None) -> list[LlmCall]:
     """Build one timed LLM call for every native usage record in a turn."""
     calls: list[LlmCall] = []
@@ -52,16 +60,30 @@ def _llm_calls(turn: Turn, prices: PriceTable, source_stream_id: str | None = No
         )
         usage = record.usage
         call.tokens = Tokens(
-            input=Metric.exact(usage.input),
-            output=Metric.exact(usage.output),
-            cache_read=Metric.exact(usage.cache_read),
-            cache_write=Metric.exact(usage.cache_write),
+            input=(
+                Metric.exact(usage.input)
+                if all(
+                    usage.has_field(name)
+                    for name in ("input_tokens", "cached_input_tokens", "cache_write_input_tokens")
+                )
+                else Metric.not_available()
+            ),
+            output=Metric.exact(usage.output) if usage.has_field("output_tokens") else Metric.not_available(),
+            cache_read=Metric.exact(usage.cache_read)
+            if usage.has_field("cached_input_tokens")
+            else Metric.not_available(),
+            cache_write=Metric.exact(usage.cache_write)
+            if usage.has_field("cache_write_input_tokens")
+            else Metric.not_available(),
         )
-        call.cost = prices.cost(turn.model, _usage(usage))
+        call.cost = usage_cost(prices, turn.model, usage)
         call.price_prefix = prices.matching_prefix(turn.model)
         call.cost_parts = prices.cost_parts(turn.model, _usage(usage))
         call.cost_parts["cache_write_5m"] = CostMetric.not_available()
         call.cost_parts["cache_write_1h"] = CostMetric.not_available()
+        for kind in ("input", "output", "cache_read"):
+            if getattr(call.tokens, kind).value is None:
+                call.cost_parts[kind] = CostMetric.not_available()
         calls.append(call)
     return calls
 
@@ -80,6 +102,10 @@ def _tool_node(tool: ToolCall) -> Node:
     if tool.output is not None:
         node.result = tool.output
         node.success = _success(tool)
+        if tool.name.removeprefix("functions.") == "resume_agent" and node.success is True:
+            info.is_resume = True
+            target = arguments.get("id")
+            info.target_agent_id = target if isinstance(target, str) and target else None
     if tool.end_ms is not None:
         node.end = Metric.exact(tool.end_ms)
         if tool.start_ms is not None:
@@ -133,6 +159,16 @@ def _turn(turn: Turn, prices: PriceTable, source_stream_id: str | None) -> Node:
     ]
     for tool, child in zip(turn.tools, children, strict=True):
         events.extend(_tool_events(tool, child, source_stream_id))
+    events.extend(
+        ExecutionEvent(
+            kind="compaction",
+            event_id=record.event_id,
+            start=Metric.exact(record.timestamp_ms) if record.timestamp_ms is not None else Metric.not_available(),
+            source_order=record.source_order,
+            source_stream_id=source_stream_id,
+        )
+        for record in turn.compactions
+    )
     for result in turn.unmatched_tool_results:
         result_events = tool_execution_events(
             invocation_id=result.call_id,
@@ -168,6 +204,7 @@ def _turn(turn: Turn, prices: PriceTable, source_stream_id: str | None) -> Node:
         llm_calls=calls,
         llm_call_count=Metric.exact(len(calls)),
         execution_events=events,
+        compactions=[event.start for event in events if event.kind == "compaction"],
     )
     if turn.start_ms is not None and turn.end_ms is not None:
         node.duration = Metric.exact(turn.end_ms - turn.start_ms)
@@ -201,6 +238,11 @@ def _agent_node(rollout: Rollout, prices: PriceTable) -> Node:
         end=Metric.exact(max(ends)) if ends and complete else Metric.not_available(),
         llm_calls=calls,
         llm_call_count=Metric.exact(len(calls)),
+        compactions=[
+            Metric.exact(record.timestamp_ms) if record.timestamp_ms is not None else Metric.not_available()
+            for turn in rollout.turns
+            for record in turn.compactions
+        ],
         execution_events=sorted(
             (event for turn in rollout.turns for event in _turn(turn, prices, stream_id).execution_events),
             key=lambda event: (event.source_order is None, event.source_order or 0),
@@ -308,4 +350,18 @@ def build_root(main: Rollout, subagents: list[Rollout], prices: PriceTable, titl
             turn.children.extend(agents_for_turn)
     else:
         root.children.extend(unlinked)
+    nodes = list(iter_nodes(root))
+    for node in nodes:
+        if node.tool is None or not node.tool.is_resume or node.tool.target_agent_id is None:
+            continue
+        matches = [
+            candidate
+            for candidate in nodes
+            if candidate.kind is NodeKind.AGENT and candidate.agent_uuid == node.tool.target_agent_id
+        ]
+        if len(matches) == 1:
+            target = matches[0]
+            node.tool.linked_agent_node_id = target.node_id
+            if node.end.value is not None:
+                target.resume_times.append(node.end)
     return root

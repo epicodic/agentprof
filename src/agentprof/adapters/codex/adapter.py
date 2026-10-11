@@ -9,11 +9,11 @@ from pathlib import Path
 from agentprof.adapters.base import AdapterConfig, SessionRef, SessionSummary, latest_mtime
 from agentprof.adapters.codex.discovery import SessionFiles, default_sessions_root, read_metadata, session_files
 from agentprof.adapters.codex.prompts import first_line
-from agentprof.adapters.codex.rollout import Rollout, UsageRecord, load_rollout
+from agentprof.adapters.codex.rollout import Rollout, load_rollout
 from agentprof.adapters.codex.tools import is_known_tool_id
-from agentprof.adapters.codex.tree import build_root
+from agentprof.adapters.codex.tree import build_root, usage_cost
 from agentprof.model import CostMetric, Diagnostics, Session, sum_costs
-from agentprof.pricing import PriceTable, Usage
+from agentprof.pricing import PriceTable
 
 _TITLE_LENGTH = 80
 
@@ -42,21 +42,10 @@ def _title(main: Rollout, fallback: str) -> str:
     return fallback
 
 
-def _usage(usage: UsageRecord) -> Usage:
-    """Convert Codex token categories to the shared pricing representation."""
-    return Usage(
-        input=usage.input,
-        output=usage.output,
-        cache_read=usage.cache_read,
-        cache_write_5m=usage.cache_write,
-        cache_write_1h=0,
-    )
-
-
 def _costs(rollouts: list[Rollout], prices: PriceTable) -> list[CostMetric]:
     """Return one estimated cost for every native usage record."""
     return [
-        prices.cost(turn.model, _usage(record.usage))
+        usage_cost(prices, turn.model, record.usage)
         for rollout in rollouts
         for turn in rollout.turns
         for record in turn.token_usages

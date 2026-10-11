@@ -39,9 +39,12 @@ def _exact_or_not_available(value: int | None) -> Metric:
 
 
 def _tokens(call: DebugLlmCall) -> Tokens:
-    if call.input_tokens is None:
-        return Tokens(output=_exact_or_not_available(call.output_tokens))
-    cached = call.cached_tokens or 0
+    if call.input_tokens is None or call.cached_tokens is None:
+        return Tokens(
+            output=_exact_or_not_available(call.output_tokens),
+            cache_read=_exact_or_not_available(call.cached_tokens),
+        )
+    cached = call.cached_tokens
     return Tokens(
         input=Metric.exact(call.input_tokens - cached),
         output=_exact_or_not_available(call.output_tokens),

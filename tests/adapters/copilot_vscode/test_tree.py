@@ -406,3 +406,26 @@ def test_debug_billing_populates_main_and_nested_calls_without_changing_recorded
     roll_up(root)
     assert root.cost_total.value == 42.0
     assert child.cost_total.value == 12.5
+
+
+def test_missing_cached_count_does_not_fabricate_exact_zero_or_uncached_input() -> None:
+    raw = parse_session_data(_export_data())
+    first = raw.requests[0].timestamp_ms
+    debug = DebugLog(calls={None: [DebugLlmCall(first + 1, 1, 100, 10, None)]})
+
+    call = build_root(raw, None, debug, _USD_PER_CREDIT).children[0].llm_calls[0]
+
+    assert call.tokens.cache_read == Metric.not_available()
+    assert call.tokens.input == Metric.not_available()
+    assert call.tokens.output == Metric.exact(10)
+
+
+def test_recorded_zero_cached_count_remains_exact_zero() -> None:
+    raw = parse_session_data(_export_data())
+    first = raw.requests[0].timestamp_ms
+    debug = DebugLog(calls={None: [DebugLlmCall(first + 1, 1, 100, 10, 0)]})
+
+    call = build_root(raw, None, debug, _USD_PER_CREDIT).children[0].llm_calls[0]
+
+    assert call.tokens.cache_read == Metric.exact(0)
+    assert call.tokens.input == Metric.exact(100)

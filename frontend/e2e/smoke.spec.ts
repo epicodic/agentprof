@@ -46,7 +46,7 @@ test("browse the fixture session from the list", async ({ page }) => {
   await finding.click();
   await expect(finding).toHaveAttribute("data-selection", "local");
   await expect(page.getByTestId("tree-row-u2")).toHaveAttribute("aria-selected", "false");
-  await finding.getByRole("link", { name: /Show details:/ }).click();
+  await finding.getByRole("link", { name: "Show details: tool failure rate 50% (1/2)" }).click();
   await expectNodeParam(page, "u2");
   await expect(page.getByTestId("tree-row-u2")).toHaveAttribute("data-inspected", "true");
 });
@@ -415,7 +415,7 @@ test("reveal a finding from the findings drawer", async ({ page }) => {
   await finding.click();
   await expect(finding).toHaveAttribute("data-selection", "local");
   await expect(page.getByTestId("tree-row-u2")).toHaveAttribute("aria-selected", "false");
-  await finding.getByRole("link", { name: /Show details:/ }).click();
+  await finding.getByRole("link", { name: "Show details: tool failure rate 50% (1/2)" }).click();
   await expectNodeParam(page, "u2");
   await expect(page.getByTestId("tree-row-u2")).toHaveAttribute("data-inspected", "true");
 });

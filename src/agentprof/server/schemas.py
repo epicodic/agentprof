@@ -14,6 +14,7 @@ from agentprof.model import (
     EventCallLink,
     ExecutionEvent,
     Finding,
+    FindingReference,
     LlmCall,
     Metric,
     Node,
@@ -121,6 +122,13 @@ class ExecutionEventOut(BaseModel):
     execution_end: MetricOut
 
 
+class FindingReferenceOut(BaseModel):
+    kind: Literal["node", "call", "event"]
+    owner_id: str
+    key: str
+    label: str
+
+
 class FindingOut(BaseModel):
     heuristic_id: str
     node_id: str
@@ -128,6 +136,9 @@ class FindingOut(BaseModel):
     message: str
     evidence: dict[str, Any]
     estimated_avoidable_cost: CostOut
+    references: list[FindingReferenceOut] = Field(default_factory=list)
+    observed_cost: CostOut = Field(default_factory=lambda: CostOut(value=None, unit=None, usd=None, provenance="n/a"))
+    avoidable_cost_baseline: str | None = None
 
 
 class NodeOut(BaseModel):
@@ -370,6 +381,19 @@ def finding_out(finding: Finding) -> FindingOut:
         message=finding.message,
         evidence=finding.evidence,
         estimated_avoidable_cost=cost_out(finding.estimated_avoidable_cost),
+        references=[finding_reference_out(reference) for reference in finding.references],
+        observed_cost=cost_out(finding.observed_cost),
+        avoidable_cost_baseline=finding.avoidable_cost_baseline,
+    )
+
+
+def finding_reference_out(reference: FindingReference) -> FindingReferenceOut:
+    """Map one neutral finding reference to its API representation."""
+    return FindingReferenceOut(
+        kind=reference.kind,
+        owner_id=reference.owner_id,
+        key=reference.key,
+        label=reference.label,
     )
 
 

@@ -13,6 +13,7 @@ export type MetricOut = Schemas["MetricOut"];
 export type CostOut = Schemas["CostOut"];
 export type TokensOut = Schemas["TokensOut"];
 export type FindingOut = Schemas["FindingOut"];
+export type FindingReferenceOut = Schemas["FindingReferenceOut"];
 export type LlmCallOut = Schemas["LlmCallOut"];
 export type ToolOut = Schemas["ToolOut"];
 export type ExecutionEventOut = Schemas["ExecutionEventOut"];

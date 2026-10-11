@@ -9,6 +9,7 @@ import re
 from collections.abc import Callable
 from typing import NamedTuple
 
+from agentprof.analysis.finding_references import call_reference, node_reference
 from agentprof.model import Finding, LlmCall, Node, NodeKind, ToolCategory, iter_nodes
 
 _MIN_REPEATED_READS = 3
@@ -68,12 +69,20 @@ def _overlaps(first: tuple[int, int] | None, second: tuple[int, int] | None) -> 
 
 def _check_repeated_reads(agent: Node) -> list[Finding]:
     """W1: the same file read with overlapping line ranges at least three times within one agent."""
-    ranges_by_path: dict[str, list[tuple[int, int] | None]] = {}
-    for read in _reads(agent):
-        ranges_by_path.setdefault(read.path, []).append(read.line_range)
+    reads = _reads(agent)
+    ranges_by_path: dict[str, list[_Read]] = {}
+    for read in reads:
+        ranges_by_path.setdefault(read.path, []).append(read)
     findings: list[Finding] = []
-    for path, ranges in ranges_by_path.items():
-        count = max(sum(1 for other in ranges if _overlaps(current, other)) for current in ranges)
+    for path, path_reads in ranges_by_path.items():
+        overlapping = max(
+            (
+                [other for other in path_reads if _overlaps(current.line_range, other.line_range)]
+                for current in path_reads
+            ),
+            key=len,
+        )
+        count = len(overlapping)
         if count >= _MIN_REPEATED_READS:
             findings.append(
                 Finding(
@@ -82,6 +91,7 @@ def _check_repeated_reads(agent: Node) -> list[Finding]:
                     severity="low",
                     message=f"{path!r} read {count} times with overlapping line ranges",
                     evidence={"path": path, "count": count},
+                    references=[node_reference(read.node) for read in overlapping],
                 )
             )
     return findings
@@ -106,6 +116,13 @@ def _check_repeated_or_failed_commands(agent: Node) -> list[Finding]:
                     severity="medium",
                     message=f"repeated command run {count} times: {command!r}",
                     evidence={"command": command, "count": count},
+                    references=[
+                        node_reference(child)
+                        for child in agent.children
+                        if child.tool is not None
+                        and child.tool.category is ToolCategory.SHELL
+                        and child.tool.command == command
+                    ],
                 )
             )
 
@@ -121,6 +138,7 @@ def _check_repeated_or_failed_commands(agent: Node) -> list[Finding]:
                     severity="medium",
                     message=f"tool failure rate {rate:.0%} ({failures}/{len(tool_children)})",
                     evidence={"failure_rate": rate},
+                    references=[node_reference(child) for child in tool_children],
                 )
             )
     return findings
@@ -128,20 +146,21 @@ def _check_repeated_or_failed_commands(agent: Node) -> list[Finding]:
 
 def _check_polling_loops(agent: Node) -> list[Finding]:
     """W5: at least five consecutive shell polling calls without other tool calls."""
-    streak = 0
+    streak: list[Node] = []
     for child in agent.children:
         if not _is_category(child, ToolCategory.SHELL_POLL):
-            streak = 0
+            streak = []
             continue
-        streak += 1
-        if streak == _MIN_POLLING_STREAK:
+        streak.append(child)
+        if len(streak) == _MIN_POLLING_STREAK:
             return [
                 Finding(
                     heuristic_id="W5",
                     node_id=agent.node_id,
                     severity="low",
-                    message=f"{streak} consecutive polling calls",
-                    evidence={"streak": streak},
+                    message=f"{len(streak)} consecutive polling calls",
+                    evidence={"streak": len(streak)},
+                    references=[node_reference(node) for node in streak],
                 )
             ]
     return []
@@ -168,6 +187,7 @@ def _check_cost_outliers(parent: Node) -> list[Finding]:
                     severity="medium",
                     message=f"cost {cost:.1f} {unit} above the 90th percentile of its siblings",
                     evidence={"cost": cost, "unit": unit, "threshold": threshold},
+                    references=[node_reference(sibling) for sibling in siblings],
                 )
             )
     return findings
@@ -196,6 +216,16 @@ def _check_reacquired_context(parent: Node) -> list[Finding]:
                         severity="low",
                         message=f"{read.path!r} was already read by the parent agent",
                         evidence={"path": read.path},
+                        references=[
+                            node_reference(read.node),
+                            *[
+                                node_reference(parent_read.node)
+                                for parent_read in _reads(parent)
+                                if parent_read.path == read.path
+                                and parent_read.node.end.value is not None
+                                and 0 <= start - parent_read.node.end.number() <= _REACQUIRE_WINDOW_MS
+                            ],
+                        ],
                     )
                 )
     return findings
@@ -232,6 +262,7 @@ def _check_retry_chains(parent: Node) -> list[Finding]:
                         severity="medium",
                         message=f"topic {similarity:.0%} similar to earlier sibling {earlier.node_id!r}",
                         evidence={"earlier": earlier.node_id, "similarity": similarity},
+                        references=[node_reference(earlier), node_reference(later)],
                     )
                 )
                 break
@@ -241,9 +272,12 @@ def _check_retry_chains(parent: Node) -> list[Finding]:
 def _prompt_and_cached(call: LlmCall) -> tuple[float, float] | None:
     """Prompt size and cached part of one call, or `None` if the counts are unavailable."""
     tokens = call.tokens
-    if (uncached := tokens.input.value) is None or (cached := tokens.cache_read.value) is None:
+    if (
+        (uncached := tokens.input.value) is None
+        or (cached := tokens.cache_read.value) is None
+        or (cache_write := tokens.cache_write.value) is None
+    ):
         return None
-    cache_write = tokens.cache_write.value or 0
     return float(uncached + cached + cache_write), float(cached)
 
 
@@ -253,7 +287,8 @@ def _check_context_bloat(agent: Node) -> list[Finding]:
     Only the uncached part (`input + cache_write`) counts towards the size rule: cached tokens cost a fraction
     of that, so a large but well-cached context is not waste.
     """
-    measured = [pair for call in agent.llm_calls if (pair := _prompt_and_cached(call)) is not None]
+    measured_calls = [(call, pair) for call in agent.llm_calls if (pair := _prompt_and_cached(call)) is not None]
+    measured = [pair for _, pair in measured_calls]
     if not measured:
         return []
     findings: list[Finding] = []
@@ -267,6 +302,11 @@ def _check_context_bloat(agent: Node) -> list[Finding]:
                 severity="medium",
                 message=f"mean uncached prompt of {mean_uncached:,.0f} tokens per LLM call",
                 evidence={"mean_uncached_prompt_tokens": mean_uncached},
+                references=[
+                    reference
+                    for call, _ in measured_calls
+                    if (reference := call_reference(agent, call, agent.llm_calls)) is not None
+                ],
             )
         )
     if len(measured) >= _MIN_CALLS_FOR_CACHE_RATIO and total_prompt > 0:
@@ -279,6 +319,11 @@ def _check_context_bloat(agent: Node) -> list[Finding]:
                     severity="low",
                     message=f"cache hit ratio {ratio:.0%}",
                     evidence={"cache_hit_ratio": ratio},
+                    references=[
+                        reference
+                        for call, _ in measured_calls
+                        if (reference := call_reference(agent, call, agent.llm_calls)) is not None
+                    ],
                 )
             )
     return findings
