@@ -98,6 +98,9 @@ Costs keep their native unit (`credits` for Copilot, `USD` for Claude Code) and 
 `CostMetric.usd_per_unit` converts a non-USD unit to dollars (`CostMetric.usd`), and the roll-up keeps it.
 The Copilot adapter takes the rate from `usd_per_credit` in `pricing.json` (default $0.01, replaceable with `--pricing`).
 The Codex adapter estimates API-equivalent USD costs through the shared price table because subscription usage has no per-session billed amount.
+Codex retains native token-field availability: absent cache counts are unavailable, and uncached input cannot be split when either cache count is missing.
+Its per-call and summary price estimates are unavailable when required pricing counts are missing.
+The existing API-equivalent total uses 5m write pricing when writes are reported without a TTL; recorded TTL quantities and TTL category costs remain unavailable.
 The API adds `usd` to every cost, and the session list sorts its cost column by it.
 `ToolInfo.category` is the neutral tool class that heuristics use; `native_id` keeps the agent's own name.
 `ToolInfo.writes_file` marks tools that write a whole file rather than editing part of one; the frontend uses it to label artifacts `created` vs `modified`.
@@ -121,11 +124,14 @@ Each adapter package follows the same split: `discovery.py` finds files, parser 
 The Copilot session file records sub-agents' tool calls without arguments; `tree.py` takes them from the transcript's `tool.execution_start` events instead.
 Claude Code's `tree.py` turns each `compact_boundary` transcript entry into an exact `Node.compactions` entry on the turn or agent in which it occurs (main transcript split by turn, or a sub-agent transcript); `<synthetic>` messages are outside the context.
 Copilot's `tree.py` treats an agent's most frequent debug-log `debugName` as its conversation and marks other kinds as side requests; token counts the debug log does not record stay `n/a`.
+When cached tokens are missing, Copilot leaves both cache reads and unsplittable uncached input unavailable rather than reporting an exact zero.
 Copilot keeps debug-log span IDs as call identities and links generated tool IDs through `agent_response` records whose span is `agent-msg-<request span>`.
 Typed `tool_call_response` parts in debug request inputs identify result users; the earliest request containing a completed tool’s result is linked within the same agent stream.
 Complete typed tool identity headers before Copilot’s truncation marker remain usable without retaining response content.
 Missing or ambiguous metadata remains unresolved, and repeated result history in later calls does not duplicate the first-result-user link.
 The Codex adapter groups rollout JSONL files by root session id, maps each `token_usage_record` to an LLM call, and nests subagent rollouts under delegation calls when their metadata permits it.
+Native `response_item` compaction markers retain exact timestamps, source order and available event IDs without exposing encrypted content.
+Successful `resume_agent` results link only a unique exact harness ID and retain the recorded resume time; failed results do not mark a successful resume.
 Adapters set only what they know (per-call tokens and cost, or totals); the roll-up derives the rest.
 `summarize` must give the same total cost as the analysed session's root, which `tests/test_adapter_contract.py` checks: Claude Code adds `message_cost` over all transcripts with `model.sum_costs`, Codex adds every rollout token-usage record through `PriceTable.cost`, and Copilot adds each request's `copilotCredits`.
 For a live Copilot session `read_session_state` finds the credits with a line scan: it JSON-parses only the snapshot, `requests` patches and `requests[N].copilotCredits` patches.
@@ -146,6 +152,15 @@ Parse problems go into `Session.diagnostics` rather than raising, unless the ses
 Unless the adapter already set `compactions`, it estimates them: one entry at the later call's start wherever the context size drops below half (`_COMPACTION_DROP`) of the previous call's.
 A sub-agent is checked over its own calls; the main agent is checked over the calls of all turns, and each entry goes to the turn of the later call.
 The session node then takes the largest turn `context_peak` and all turn `compactions`, sorted by time.
+
+Findings carry typed node, call and event references that use the same owner-aware identities as inspection links.
+Unique native call IDs are preferred; without one, a unique exact finite timestamp is permitted, while duplicate native IDs never fall back to a timestamp.
+Evidence findings link cache rewrites, context growth, long call intervals, compactions and recorded resumes to supporting calls, tools or source events.
+Compaction findings distinguish recorded markers from inferred context drops and remain available without adjacent calls.
+Long call intervals retain their timing basis and intervening activity; they do not establish cache expiry or prove inactivity.
+The context-bloat/cache-ratio heuristic requires all disjoint prompt quantities to be available.
+Observed cache-write cost is separate from estimated avoidable cost, whose counterfactual baseline must be explicit.
+Finding costs are diagnostic annotations and must not be summed: several findings may cite the same call.
 
 ### Registry (`registry.py`)
 
@@ -215,6 +230,8 @@ components/
   NodeDrawer        tabbed details and call focus of the selected node; composes the components below
   NodeOverview      task, outcome, previews and own/inclusive metrics for one node
   NodeFindings      grouped findings and expandable evidence for one node
+  FindingEvidence   exact supporting links, observed/avoidable costs and raw evidence disclosure in both finding views
+  CacheSection      own/inclusive cache quantities, coverage and estimated category costs beside billing totals
   ContextSection    a node's context figures and stacked bar chart of its own LLM calls
   CostSection       a time-aligned bar chart of one agent's LLM call costs
   LlmCallsTable     each own LLM call's metrics and expandable details with direct tools
@@ -436,7 +453,15 @@ All tabs stay mounted while switching between them.
 
 Overview shows the task topic and outcome, prompt and result previews when available, duration, own and inclusive costs, LLM and tool call counts, and findings.
 Its permanently visible Metric details heading and tables contain start time, user wait and a six-category own/inclusive token table.
-`NodeFindings` groups findings by heuristic and severity, with each finding's message, estimated avoidable cost and expandable evidence.
+`NodeFindings` groups findings by heuristic and severity, with each finding's message, supporting caption links, separate observed/avoidable costs and expandable evidence.
+Unresolved or ambiguous references remain unavailable, and evidence JSON stays accessible through its existing disclosure.
+Overview's `CacheSection` shows cache-read/write quantities, recorded 5m/1h write subsets and category estimates for own calls and calls including descendants.
+The main agent's own calls live on turns; inclusive accounting visits each node once and includes untimed and side calls.
+Partial quantities and category costs show measured-call coverage and partial subtotals; recorded zero remains distinct from missing data.
+Native call-cost subtotals and node billing totals remain separate because aggregate recorded billing may exceed the available call records.
+Copilot credits never supply an inferred cache cost, and Codex API-equivalent estimates remain distinct from recorded billing.
+Cold-rewrite counts and write costs aggregate distinct flagged calls, never overlapping findings or repeated inclusive subtree totals.
+The 5m/1h rows are subsets of total writes and must not be added to their parent row.
 The context details show peak, compaction count and mean growth per call, plus the node's own calls as cache-read, cache-write and uncached-input bars with a mark for each compaction.
 For the session node, context and own cost figures cover the main agent's calls across its turns; inclusive cost still includes descendants.
 `ContextSection` uses `data-testid="context-section"` and `data-testid="context-chart"` for its chart.
@@ -465,6 +490,8 @@ Content lists artifacts and loads the selected node's full prompt, result and pr
 On narrow screens, child topics and artifact paths wrap, while the timeline, cost and context charts scroll together inside their shared container.
 
 `FindingsDrawer` lists all findings sorted by severity, then heuristic id, with the topic of the node each belongs to; a row mark stays local, while its message link opens the supporting node.
+Its supporting evidence links use the same exact call/event/tool navigation as node findings and close the findings drawer when inspecting a destination.
+Raw evidence remains accessible through an expandable disclosure in both finding views.
 
 #### Display conventions (`lib/format.ts`)
 

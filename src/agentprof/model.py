@@ -243,6 +243,16 @@ class NodeKind(StrEnum):
     TOOL = "tool"
 
 
+@dataclass(frozen=True)
+class FindingReference:
+    """A stable reference to a node, model call, or execution event supporting a finding."""
+
+    kind: Literal["node", "call", "event"]
+    owner_id: str
+    key: str
+    label: str
+
+
 @dataclass
 class Finding:
     """A waste heuristic hit, attached to a node."""
@@ -253,6 +263,9 @@ class Finding:
     message: str
     evidence: dict[str, object] = field(default_factory=dict)
     estimated_avoidable_cost: CostMetric = field(default_factory=CostMetric.not_available)
+    references: list[FindingReference] = field(default_factory=list)
+    observed_cost: CostMetric = field(default_factory=CostMetric.not_available)
+    avoidable_cost_baseline: str | None = None
 
 
 @dataclass

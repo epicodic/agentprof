@@ -14,6 +14,7 @@ import { subAgents, turns } from "../lib/tree";
 import { buildWorkflowIndex, type WorkflowIndex, workflowAncestors } from "../lib/workflowScope";
 import { observeWorkflow } from "../lib/workflowState";
 import { ArtifactsTable } from "./ArtifactsTable";
+import { CacheSection } from "./CacheSection";
 import { ChildNodesTable } from "./ChildNodesTable";
 import { ContextSection } from "./ContextSection";
 import { CostSection } from "./CostSection";
@@ -264,6 +265,7 @@ export function NodeDrawer({
             <Tabs.Panel ref={overviewPosition.ref} onScroll={overviewPosition.onScroll} value="overview" pt="sm">
               <Stack gap="sm">
                 <NodeOverview node={node} detail={detail.data} />
+                <CacheSection node={node} agent={sessionId.split(":", 1)[0] ?? ""} />
                 <Button variant="subtle" size="xs" onClick={() => setTab("content")}>
                   Open full content
                 </Button>

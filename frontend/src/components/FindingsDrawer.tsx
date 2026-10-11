@@ -3,12 +3,14 @@
 
 import { Badge, Drawer, Group, Stack, Text } from "@mantine/core";
 import type { FindingOut, NodeOut } from "../api/types";
+import type { EntityRef } from "../lib/entities";
 import { findingKey } from "../lib/findingGroups";
 import { truncateTitle } from "../lib/format";
 import { severityColor } from "../lib/severity";
 import { findNode } from "../lib/tree";
 import { DetailLink } from "./DetailLink";
 import selectionClasses from "./EntitySelection.module.css";
+import { FindingEvidence } from "./FindingEvidence";
 import { type InspectionAction, useInspectionMenuTarget } from "./InspectionMenu";
 import { useSessionInteraction } from "./SessionInteraction";
 
@@ -36,6 +38,11 @@ export function FindingsDrawer({ opened, findings, root, onClose, onReveal }: Pr
         run: () => onReveal(finding.node_id),
       },
     ];
+  }
+
+  function inspectReference(ref: EntityRef): void {
+    interaction?.openEntity(ref);
+    onClose();
   }
 
   return (
@@ -101,6 +108,12 @@ export function FindingsDrawer({ opened, findings, root, onClose, onReveal }: Pr
                 <Text size="xs" c="dimmed" title={topic}>
                   {truncateTitle(topic)}
                 </Text>
+                <FindingEvidence
+                  finding={finding}
+                  root={root}
+                  sessionId={interaction?.sessionId ?? null}
+                  onInspect={inspectReference}
+                />
               </Stack>
             </Group>
           );

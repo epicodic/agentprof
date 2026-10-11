@@ -1,14 +1,16 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 epicodic
 
-import { Badge, Box, Button, Code, Group, Stack, Text, Title } from "@mantine/core";
+import { Badge, Box, Button, Group, Stack, Text, Title } from "@mantine/core";
 import { useState } from "react";
 import type { FindingOut } from "../api/types";
 import { findingGroups } from "../lib/findingGroups";
-import { formatCost, withProvenance } from "../lib/format";
 import { severityColor } from "../lib/severity";
+import { FindingEvidence } from "./FindingEvidence";
+import { useSessionInteraction } from "./SessionInteraction";
 
 export function NodeFindings({ findings }: { findings: FindingOut[] }) {
+  const interaction = useSessionInteraction();
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const [expandedEvidence, setExpandedEvidence] = useState<Set<string>>(() => new Set());
   if (findings.length === 0) return null;
@@ -52,53 +54,19 @@ export function NodeFindings({ findings }: { findings: FindingOut[] }) {
               <Stack gap="xs" mt="xs" ml="md">
                 {group.items.map((finding, index) => {
                   const key = `${group.key}:${index}`;
-                  const hasEvidence = Object.keys(finding.evidence).length > 0;
                   const evidenceIsExpanded = expandedEvidence.has(key);
                   return (
                     <Stack key={key} gap={4}>
                       <Text size="sm" style={{ overflowWrap: "anywhere" }}>
                         {finding.message}
                       </Text>
-                      {finding.estimated_avoidable_cost.value !== null && (
-                        <Text size="xs" c="dimmed">
-                          Estimated avoidable cost:{" "}
-                          {withProvenance(
-                            formatCost(finding.estimated_avoidable_cost),
-                            finding.estimated_avoidable_cost,
-                          )}
-                        </Text>
-                      )}
-                      {hasEvidence && (
-                        <>
-                          <Group gap="xs">
-                            <Button
-                              type="button"
-                              variant="subtle"
-                              size="compact-xs"
-                              aria-label={`${evidenceIsExpanded ? "Collapse" : "Expand"} evidence`}
-                              aria-expanded={evidenceIsExpanded}
-                              onClick={() => toggle(key, setExpandedEvidence, expandedEvidence)}
-                              style={{ minWidth: 24, paddingInline: 4 }}
-                            >
-                              <span aria-hidden="true">{evidenceIsExpanded ? "▾" : "▸"}</span>
-                            </Button>
-                            <Text size="xs">Evidence</Text>
-                          </Group>
-                          {evidenceIsExpanded && (
-                            <Code
-                              block
-                              style={{
-                                whiteSpace: "pre-wrap",
-                                overflowWrap: "anywhere",
-                                maxHeight: 400,
-                                overflow: "auto",
-                              }}
-                            >
-                              {JSON.stringify(finding.evidence, null, 2)}
-                            </Code>
-                          )}
-                        </>
-                      )}
+                      <FindingEvidence
+                        finding={finding}
+                        root={interaction?.root ?? null}
+                        sessionId={interaction?.sessionId ?? null}
+                        evidenceExpanded={evidenceIsExpanded}
+                        onToggleEvidence={() => toggle(key, setExpandedEvidence, expandedEvidence)}
+                      />
                     </Stack>
                   );
                 })}

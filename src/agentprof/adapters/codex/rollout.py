@@ -18,6 +18,11 @@ class UsageRecord:
     cache_read: int
     cache_write: int
     output: int
+    recorded_fields: frozenset[str] | None = field(default=None, compare=False)
+
+    def has_field(self, name: str) -> bool:
+        """Whether a native count was recorded; constructed records contain all counts."""
+        return self.recorded_fields is None or name in self.recorded_fields
 
 
 @dataclass(frozen=True)
@@ -37,6 +42,15 @@ class UserInput:
     message_id: str | None
     timestamp_ms: int | None
     source_order: int | None
+
+
+@dataclass(frozen=True)
+class CompactionRecord:
+    """A native compaction marker without its encrypted content."""
+
+    event_id: str | None
+    timestamp_ms: int | None
+    source_order: int
 
 
 @dataclass(frozen=True)
@@ -94,6 +108,7 @@ class Turn:
     completion_recorded: bool = False
     completion_order: int | None = None
     unmatched_tool_results: list[ToolResultRecord] = field(default_factory=list)
+    compactions: list[CompactionRecord] = field(default_factory=list)
 
 
 @dataclass
@@ -172,6 +187,9 @@ def _usage(value: object) -> UsageRecord | None:
         cache_read=cache_read,
         cache_write=cache_write,
         output=count("output_tokens"),
+        recorded_fields=frozenset(
+            name for name in _USAGE_FIELDS if isinstance(value.get(name), int) and not isinstance(value.get(name), bool)
+        ),
     )
 
 
@@ -247,6 +265,9 @@ class _Parser:
         if turn is None:
             return
         item_type = payload.get("type")
+        if item_type == "compaction":
+            turn.compactions.append(CompactionRecord(_text(payload.get("id")), timestamp_ms, source_order))
+            return
         if item_type == "message" and payload.get("role") == "user":
             turn.user_inputs.append(UserInput(_text(payload.get("id")), timestamp_ms, source_order))
             turn.prompt = _content_text(payload.get("content")) or turn.prompt

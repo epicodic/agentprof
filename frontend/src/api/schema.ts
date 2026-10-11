@@ -321,6 +321,25 @@ export interface components {
                 [key: string]: unknown;
             };
             estimated_avoidable_cost: components["schemas"]["CostOut"];
+            /** References */
+            references?: components["schemas"]["FindingReferenceOut"][];
+            observed_cost?: components["schemas"]["CostOut"];
+            /** Avoidable Cost Baseline */
+            avoidable_cost_baseline?: string | null;
+        };
+        /** FindingReferenceOut */
+        FindingReferenceOut: {
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "node" | "call" | "event";
+            /** Owner Id */
+            owner_id: string;
+            /** Key */
+            key: string;
+            /** Label */
+            label: string;
         };
         /** HTTPValidationError */
         HTTPValidationError: {

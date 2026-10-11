@@ -539,3 +539,16 @@ def test_cost_out_adds_the_usd_value_of_credits() -> None:
     cost = CostMetric(value=42.0, unit="credits", provenance=Provenance.EXACT, usd_per_unit=0.01)
 
     assert cost_out(cost).model_dump() == {"value": 42.0, "unit": "credits", "usd": 0.42, "provenance": "exact"}
+
+
+def test_finding_out_includes_reference_and_observed_cost_defaults() -> None:
+    finding = Finding(heuristic_id="W6", node_id="t1", severity="low", message="idle")
+    turn = Node(node_id="t1", kind=NodeKind.TURN, topic="t", findings=[finding])
+    root = Node(node_id="root", kind=NodeKind.SESSION, topic="s", children=[turn])
+    session = Session(id="claude-code:s1", agent="claude-code", title="s", workspace=None, root=root)
+
+    out = session_out(session, 100.0).model_dump()["root"]["children"][0]["findings"][0]
+
+    assert out["references"] == []
+    assert out["observed_cost"] == {"value": None, "unit": None, "usd": None, "provenance": "n/a"}
+    assert out["avoidable_cost_baseline"] is None

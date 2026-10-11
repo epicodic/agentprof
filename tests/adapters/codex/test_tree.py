@@ -328,3 +328,69 @@ def test_build_root_reports_patch_wrapped_by_exec_as_an_artifact() -> None:
     assert tool.tool is not None
     assert tool.tool.category is ToolCategory.EDIT
     assert tool.tool.paths == ("src/wrapped.py",)
+
+
+def test_missing_codex_cache_fields_remain_unavailable(tmp_path: Path) -> None:
+    import json
+
+    records = [
+        {"type": "session_meta", "payload": {"id": "missing-cache", "model": "gpt-6-sol"}},
+        {"type": "event_msg", "payload": {"type": "task_started", "turn_id": "t"}},
+        {
+            "type": "token_usage_record",
+            "payload": {"turn_id": "t", "usage": {"input_tokens": 100, "output_tokens": 10}},
+        },
+    ]
+    source = tmp_path / "rollout.jsonl"
+    source.write_text("\n".join(json.dumps(record) for record in records))
+    call = build_root(load_rollout(source), [], _prices(), "Missing cache").children[0].llm_calls[0]
+
+    assert call.tokens.cache_read == Metric.not_available()
+    assert call.tokens.cache_write == Metric.not_available()
+    assert call.tokens.input == Metric.not_available()
+    assert call.tokens.output == Metric.exact(10)
+    assert call.cost_parts["cache_read"].value is None
+
+
+def test_codex_recorded_compaction_survives_as_exact_event(tmp_path: Path) -> None:
+    import json
+
+    records = [
+        {"type": "session_meta", "payload": {"id": "compact", "model": "gpt-6-sol"}},
+        {"type": "event_msg", "payload": {"type": "task_started", "turn_id": "t"}},
+        {
+            "type": "response_item",
+            "timestamp": "2026-09-26T10:00:01.000Z",
+            "payload": {"type": "compaction", "id": "native-compact", "encrypted_content": "synthetic"},
+        },
+    ]
+    source = tmp_path / "rollout.jsonl"
+    source.write_text("\n".join(json.dumps(record) for record in records))
+    turn = build_root(load_rollout(source), [], _prices(), "Compaction").children[0]
+
+    assert turn.compactions == [Metric.exact(1790416801000)]
+    event = next(event for event in turn.execution_events if event.kind == "compaction")
+    assert event.event_id == "native-compact"
+    assert event.start == turn.compactions[0]
+    assert event.source_order == 2
+
+
+def test_codex_successful_resume_links_only_exact_target() -> None:
+    resume = ToolCall("resume", "resume_agent", '{"id":"child"}', 100, output='{"status":"running"}', end_ms=200)
+    main = Rollout(session_id="main", turns=[Turn("t", start_ms=1, tools=[resume])])
+    child = Rollout(thread_id="child", parent_thread_id="main", turns=[Turn("ct", start_ms=10)])
+    root = build_root(main, [child], _prices(), "Resume")
+    tool = _find(root, "resume").tool
+    assert tool is not None
+    assert tool.is_resume is True
+    assert tool.target_agent_id == "child"
+    assert tool.linked_agent_node_id == "agent-child"
+    assert _find(root, "agent-child").resume_times == [Metric.exact(200)]
+
+
+def test_codex_failed_resume_is_not_a_recorded_successful_resume() -> None:
+    resume = ToolCall("resume", "resume_agent", '{"id":"child"}', 100, output="failed", output_status="failed")
+    root = build_root(Rollout(session_id="main", turns=[Turn("t", tools=[resume])]), [], _prices(), "Resume")
+    tool = _find(root, "resume").tool
+    assert tool is not None
+    assert tool.is_resume is False

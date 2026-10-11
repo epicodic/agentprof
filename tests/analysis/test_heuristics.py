@@ -251,7 +251,12 @@ def test_w3_still_flags_a_retry_with_the_same_number() -> None:
 def _call(uncached: int, cached: int) -> LlmCall:
     return LlmCall(
         start=Metric.exact(0),
-        tokens=Tokens(input=Metric.exact(uncached), output=Metric.exact(100), cache_read=Metric.exact(cached)),
+        tokens=Tokens(
+            input=Metric.exact(uncached),
+            output=Metric.exact(100),
+            cache_read=Metric.exact(cached),
+            cache_write=Metric.exact(0),
+        ),
     )
 
 
@@ -299,3 +304,51 @@ def test_w8_ignores_calls_without_token_counts() -> None:
     agent.llm_calls = [LlmCall(start=Metric.exact(0))] * 3
 
     assert _hits(find_findings(agent), "W8") == []
+
+
+def test_w8_ignores_unknown_cache_write_counts() -> None:
+    agent = _agent("a1", [])
+    agent.llm_calls = [
+        LlmCall(
+            start=Metric.exact(0),
+            tokens=Tokens(input=Metric.exact(150_000), cache_read=Metric.exact(0)),
+        )
+    ]
+
+    assert _hits(find_findings(agent), "W8") == []
+
+
+def test_w8_counts_an_explicit_zero_cache_write() -> None:
+    agent = _agent("a1", [])
+    agent.llm_calls = [_call(150_000, 0)]
+
+    findings = find_findings(agent)
+
+    assert any(f.heuristic_id == "W8" and "mean uncached prompt" in f.message for f in findings)
+
+
+def test_repeated_read_finding_references_each_supporting_tool() -> None:
+    tools = [_read(f"t{i}", i * 10, "foo.py") for i in range(3)]
+    agent = _agent("a1", tools)
+
+    finding = next(finding for finding in find_findings(agent) if finding.heuristic_id == "W1")
+
+    assert {reference.owner_id for reference in finding.references} == {"t0", "t1", "t2"}
+    assert all(reference.kind == "node" for reference in finding.references)
+
+
+def test_context_bloat_finding_references_supporting_calls() -> None:
+    calls = [
+        LlmCall(
+            start=Metric.exact(index),
+            call_id=f"call-{index}",
+            tokens=Tokens(input=Metric.exact(110_000), cache_read=Metric.exact(1), cache_write=Metric.exact(0)),
+        )
+        for index in range(1)
+    ]
+    agent = _agent("a1", [])
+    agent.llm_calls = calls
+
+    finding = next(finding for finding in find_findings(agent) if finding.heuristic_id == "W8")
+
+    assert finding.references[0].key == "id:call-0"
