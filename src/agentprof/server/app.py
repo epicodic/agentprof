@@ -7,7 +7,7 @@ import json
 from collections.abc import AsyncIterator, Awaitable, Callable, Collection
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated
 from urllib.parse import quote, urlsplit
 
 from fastapi import FastAPI, HTTPException, Query, Request
@@ -15,7 +15,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTex
 from starlette.datastructures import Headers
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-from agentprof.analysis.agent_summary import agent_ids
+from agentprof.analysis.finding_order import ordered_findings
 from agentprof.analysis.transcripts import (
     TranscriptCursorConflict,
     TranscriptCursorError,
@@ -24,7 +24,7 @@ from agentprof.analysis.transcripts import (
     scope_entries,
     search_entries,
 )
-from agentprof.model import Node, Session, iter_nodes
+from agentprof.model import Session, iter_nodes
 from agentprof.pricing import PriceTable
 from agentprof.registry import EventKind, Registry, RegistryEvent, SessionUnavailable
 from agentprof.server.pricing_schema import PricingOut, pricing_out
@@ -38,13 +38,11 @@ from agentprof.server.schemas import (
     ProjectedSessionOut,
     SessionOut,
     SummaryOut,
-    activity_flags,
     agent_summary_out,
     diagnostics_detail_out,
-    diagnostics_out,
     finding_out,
     node_detail_out,
-    node_out,
+    projected_session_out,
     session_out,
     summary_out,
 )
@@ -63,8 +61,6 @@ _STATIC_DIR = Path(__file__).parent / "static"
 _ASSETS_PREFIX = "assets/"
 _IMMUTABLE = {"Cache-Control": "public, max-age=31536000, immutable"}  # Vite puts a content hash in asset names
 _NO_CACHE = {"Cache-Control": "no-cache"}
-_SESSION_FIELDS = ("session", "diagnostics", "tree")
-_SEVERITY_ORDER = {"high": 0, "medium": 1, "low": 2}
 _PLACEHOLDER_PAGE = """<!doctype html>
 <html lang="en">
 <head><meta charset="utf-8"><title>agentprof</title><!-- API discovery: /api --></head>
@@ -187,74 +183,6 @@ def session_html(html: str, session_id: str) -> str:
     if "</head>" in html:
         return html.replace("</head>", f"{markup}</head>", 1)
     return f"{markup}{html}"
-
-
-def _mark_omitted(node: dict[str, Any], source: Node, depth: int) -> None:
-    """Mark omitted descendants on a tree already mapped only to `depth`."""
-    node["children_omitted"] = bool(source.children) if depth == 0 else False
-    if depth > 0:
-        for mapped, child in zip(node["children"], source.children, strict=True):
-            _mark_omitted(mapped, child, depth - 1)
-
-
-def _project_session(session: Session, mtime: float, depth: int | None, fields: str | None) -> JSONResponse:
-    """Select documented top-level groups and optionally bound tree depth."""
-    selected = _SESSION_FIELDS if fields is None else tuple(part.strip() for part in fields.split(","))
-    if not selected or any(part not in _SESSION_FIELDS for part in selected):
-        raise HTTPException(status_code=422, detail="fields must contain: session, diagnostics, tree")
-    projected: dict[str, Any] = {}
-    if "session" in selected:
-        projected.update(
-            id=session.id,
-            agent=session.agent,
-            title=session.title,
-            workspace=session.workspace,
-            mtime=mtime,
-            sources=session.sources,
-        )
-    if "diagnostics" in selected:
-        projected["diagnostics"] = diagnostics_out(session.diagnostics).model_dump(mode="json")
-    if "tree" in selected:
-        root = node_out(
-            session.root,
-            agent_ids(session.root),
-            frontier=session.root.end.value,
-            max_depth=depth,
-            activity_flags=activity_flags(session.root, session.root.end.value) if depth is not None else None,
-        ).model_dump(mode="json")
-        if depth is not None:
-            _mark_omitted(root, session.root, depth)
-        projected["root"] = root
-    return JSONResponse(projected)
-
-
-def _sorted_findings(root: Node) -> list[FindingOut]:
-    """Flatten attached findings and order known avoidable USD, severity, then event time."""
-    attached: list[tuple[FindingOut, float | None]] = []
-    for node in iter_nodes(root):
-        for finding in node.findings:
-            observed = finding.evidence.get("call_start_ms")
-            time = (
-                float(observed)
-                if isinstance(observed, (int, float)) and not isinstance(observed, bool)
-                else node.start.value
-            )
-            attached.append((finding_out(finding), time))
-
-    def order(item: tuple[FindingOut, float | None]) -> tuple[bool, float, int, bool, float, str, str]:
-        finding, time = item
-        usd = finding.estimated_avoidable_cost.usd
-        return (
-            usd is None,
-            -usd if usd is not None else 0.0,
-            _SEVERITY_ORDER.get(finding.severity, len(_SEVERITY_ORDER)),
-            time is None,
-            time if time is not None else 0.0,
-            finding.heuristic_id,
-            finding.node_id,
-        )
-
-    return [finding for finding, _ in sorted(attached, key=order)]
 
 
 def host_name(header: str) -> str | None:
@@ -382,7 +310,7 @@ def create_app(
     @app.get("/api/sessions/{session_id}/findings", summary="List a session's findings by estimated cost and severity")
     def get_findings(session_id: str) -> list[FindingOut]:
         session, _ = analysed_session(registry, session_id)
-        return _sorted_findings(session.root)
+        return [finding_out(finding) for finding in ordered_findings(session.root)]
 
     @app.get("/api/sessions/{session_id}", response_model=SessionOut | ProjectedSessionOut)
     def get_session(
@@ -400,11 +328,12 @@ def create_app(
         ] = None,
     ) -> SessionOut | JSONResponse:
         session, mtime = analysed_session(registry, session_id)
-        return (
-            session_out(session, mtime)
-            if depth is None and fields is None
-            else _project_session(session, mtime, depth, fields)
-        )
+        if depth is None and fields is None:
+            return session_out(session, mtime)
+        try:
+            return JSONResponse(projected_session_out(session, mtime, depth, fields))
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
 
     @app.get("/api/sessions/{session_id}/nodes/{node_id}")
     def get_node(session_id: str, node_id: str) -> NodeDetailOut:

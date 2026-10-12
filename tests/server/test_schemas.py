@@ -23,7 +23,7 @@ from agentprof.model import (
 from agentprof.registry import SessionRow
 from agentprof.server.schemas import (
     LlmCallOut,
-    activity_flags,
+    agent_summary_out,
     cost_out,
     node_detail_out,
     node_out,
@@ -69,6 +69,16 @@ def _session() -> Session:
     return Session(
         id="claude-code:s1", agent="claude-code", title="Fix it", workspace="/repo", root=root, sources=["transcript"]
     )
+
+
+def test_session_out_embeds_the_agent_summary_rows() -> None:
+    agent = Node(node_id="a1", kind=NodeKind.AGENT, topic="Helper", agent_uuid="helper-id", start=Metric.exact(2))
+    turn = Node(node_id="t1", kind=NodeKind.TURN, topic="Go", children=[agent], start=Metric.exact(1))
+    root = Node(node_id="session", kind=NodeKind.SESSION, topic="s", children=[turn])
+    session = Session(id="claude-code:s1", agent="claude-code", title="s", workspace=None, root=root)
+
+    assert session_out(session, 0.0).agents == agent_summary_out(session, 0.0).agents
+    assert [row.agent_id for row in session_out(session, 0.0).agents] == [1, 2]
 
 
 def test_session_out_maps_the_tree_without_texts() -> None:
@@ -187,7 +197,7 @@ def test_bounded_node_keeps_activity_from_omitted_descendants() -> None:
     active = Node(node_id="agent", kind=NodeKind.AGENT, topic="agent", start=Metric.exact(10))
     root = Node(node_id="root", kind=NodeKind.SESSION, topic="s", children=[active])
 
-    output = node_out(root, max_depth=0, activity_flags=activity_flags(root, None))
+    output = node_out(root, max_depth=0)
 
     assert output.children == []
     assert output.active_descendant is True

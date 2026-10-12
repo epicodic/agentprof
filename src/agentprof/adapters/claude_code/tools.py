@@ -60,6 +60,8 @@ _KNOWN_OTHER_TOOL_IDS_CASEFOLDED = {name.casefold() for name in _KNOWN_OTHER_TOO
 _MCP_PREFIX = "mcp__"
 _FILE_CATEGORIES = (ToolCategory.READ, ToolCategory.EDIT)
 _WHOLE_FILE_WRITERS = {"write"}
+# Tools that stop the agent until the user answers.
+_USER_BLOCKING_TOOLS = {"askuserquestion"}
 
 
 def is_known_tool_id(name: str) -> bool:
@@ -98,5 +100,6 @@ def tool_info(name: str, arguments: dict[str, object]) -> ToolInfo:
         line_range=_line_range(arguments) if category is ToolCategory.READ else None,
         command=str(command) if command and category is ToolCategory.SHELL else None,
         writes_file=name.casefold() in _WHOLE_FILE_WRITERS,
+        blocks_on_user=name.casefold() in _USER_BLOCKING_TOOLS,
         arguments=arguments,
     )

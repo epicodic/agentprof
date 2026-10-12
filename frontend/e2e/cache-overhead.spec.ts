@@ -3,7 +3,6 @@
 
 import { expect, type Page, test } from "@playwright/test";
 import type { FindingOut } from "../src/api/types";
-import { withCallKeys } from "../src/test/callKeys";
 import {
   cost,
   makeCall,
@@ -14,6 +13,7 @@ import {
   metric,
   tokens,
 } from "../src/test/factories";
+import { served } from "../src/test/served";
 import { assertNoSelectionActionControls, installDeepWorkflow, WORKFLOW_SESSION } from "./helpers/workflowFixture";
 import { workflowStream } from "./helpers/workflowStream";
 
@@ -229,7 +229,7 @@ for (const agent of ["claude-code", "codex", "copilot-vscode"] as const) {
       });
       const session = { ...makeSession(root), id, agent };
       await page.route(`**/api/sessions/${encodeURIComponent(id)}`, (route) =>
-        route.fulfill({ json: withCallKeys(session) }),
+        route.fulfill({ json: served(session) }),
       );
       await page.route(`**/api/sessions/${encodeURIComponent(id)}/nodes/own`, (route) =>
         route.fulfill({

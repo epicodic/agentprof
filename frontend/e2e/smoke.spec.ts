@@ -2,8 +2,8 @@
 // Copyright (c) 2026 epicodic
 
 import { expect, type Locator, type Page, test } from "@playwright/test";
-import { withCallKeys } from "../src/test/callKeys";
 import { makeExecutionEvent, metric } from "../src/test/factories";
+import { served } from "../src/test/served";
 
 const SESSION = "claude-code:11111111-1111-4111-8111-111111111111";
 
@@ -141,7 +141,7 @@ test("show a turn's timeline, sub-agents and tools in its detail drawer", async 
         ],
       }),
     ];
-    await route.fulfill({ response, json: withCallKeys(session) });
+    await route.fulfill({ response, json: served(session) });
   });
   await page.goto(`/sessions/${encodeURIComponent(SESSION)}`);
   await page.getByTestId("tree-row-u1").getByRole("link", { name: "Show details: Fix the parser" }).click();
@@ -276,7 +276,7 @@ test("select a sub-agent from the drawer", async ({ page }) => {
         start: metric(call.start.value + 100),
       }),
     ];
-    await route.fulfill({ response, json: withCallKeys(session) });
+    await route.fulfill({ response, json: served(session) });
   });
   await page.goto(`/sessions/${encodeURIComponent(SESSION)}`);
   await page.getByTestId("tree-row-u1").getByRole("link", { name: "Show details: Fix the parser" }).click();
@@ -353,7 +353,7 @@ test("drawer history follows browser Back and Forward", async ({ page }) => {
         start: metric(call.start.value + 100),
       }),
     ];
-    await route.fulfill({ response, json: withCallKeys(session) });
+    await route.fulfill({ response, json: served(session) });
   });
   await page.goto("/");
   const sessionRow = page.getByTestId(`session-row-${SESSION}`);

@@ -236,6 +236,8 @@ export interface components {
             /** Models */
             models: string[];
             llm_calls: components["schemas"]["MetricOut"];
+            duration: components["schemas"]["MetricOut"];
+            tokens_in_out: components["schemas"]["MetricOut"];
             context_peak: components["schemas"]["MetricOut"];
             tokens: components["schemas"]["TokensOut"];
             own_cost: components["schemas"]["CostOut"];
@@ -377,6 +379,8 @@ export interface components {
             observed_cost?: components["schemas"]["CostOut"];
             /** Avoidable Cost Baseline */
             avoidable_cost_baseline?: string | null;
+            /** Rank */
+            rank?: number | null;
         };
         /** FindingReferenceOut */
         FindingReferenceOut: {
@@ -640,6 +644,8 @@ export interface components {
             /** Sources */
             sources: string[];
             diagnostics: components["schemas"]["DiagnosticsOut"];
+            /** Agents */
+            agents: components["schemas"]["AgentSummaryRowOut"][];
             root: components["schemas"]["NodeOut"];
         };
         /** SummaryOut */

@@ -17,7 +17,8 @@ def test_agent_groups_keep_main_turns_and_nested_agents_separate() -> None:
         cost_own=_cost(2),
         cost_total=_cost(2),
         llm_calls=[LlmCall(start=Metric.exact(30), model="full-worker-model")],
-        tokens=Tokens(input=Metric.exact(20)),
+        duration=Metric.exact(20),
+        tokens=Tokens(input=Metric.exact(20), output=Metric.exact(2)),
         context_peak=Metric.exact(20),
     )
     lead = Node(
@@ -30,7 +31,8 @@ def test_agent_groups_keep_main_turns_and_nested_agents_separate() -> None:
         cost_own=_cost(3),
         cost_total=_cost(5),
         llm_calls=[LlmCall(start=Metric.exact(20), model="full-lead-model")],
-        tokens=Tokens(input=Metric.exact(30)),
+        duration=Metric.exact(40),
+        tokens=Tokens(input=Metric.exact(30), output=Metric.exact(3)),
         context_peak=Metric.exact(30),
         children=[worker],
     )
@@ -41,7 +43,8 @@ def test_agent_groups_keep_main_turns_and_nested_agents_separate() -> None:
         start=Metric.exact(1),
         end=Metric.exact(70),
         cost_own=_cost(7),
-        tokens=Tokens(input=Metric.exact(70)),
+        duration=Metric.exact(69),
+        tokens=Tokens(input=Metric.exact(70), output=Metric.exact(7)),
         llm_calls=[LlmCall(start=Metric.exact(1), model="main-model")],
         children=[lead],
     )
@@ -52,7 +55,8 @@ def test_agent_groups_keep_main_turns_and_nested_agents_separate() -> None:
         start=Metric.exact(80),
         end=Metric.exact(90),
         cost_own=_cost(1),
-        tokens=Tokens(input=Metric.exact(10)),
+        duration=Metric.exact(10),
+        tokens=Tokens(input=Metric.exact(10), output=Metric.exact(1)),
         llm_calls=[LlmCall(start=Metric.exact(80), model="main-model")],
     )
     root = Node(
@@ -75,6 +79,10 @@ def test_agent_groups_keep_main_turns_and_nested_agents_separate() -> None:
     assert main.llm_calls.value == 2
     assert lead_group.harness_agent_id == "lead-id"
     assert lead_group.models == ["full-lead-model"]
+    assert main.duration == Metric.exact(79)
+    assert lead_group.duration == Metric.exact(40)
+    assert worker_group.duration == Metric.exact(20)
+    assert main.tokens_in_out == Metric.exact(70 + 10 + 7 + 1)
 
 
 def test_agent_groups_preserve_unavailable_values() -> None:
@@ -119,3 +127,64 @@ def test_agent_summary_counts_findings_on_owned_tool_nodes() -> None:
     (main,) = agent_groups(root)
 
     assert main.findings_count == 1
+
+
+def test_agent_duration_is_estimated_when_a_turn_lacks_one() -> None:
+    timed = Node(node_id="u1", kind=NodeKind.TURN, topic="a", duration=Metric.exact(5))
+    untimed = Node(node_id="u2", kind=NodeKind.TURN, topic="b")
+    root = Node(node_id="s", kind=NodeKind.SESSION, topic="s", children=[timed, untimed])
+
+    (main,) = agent_groups(root)
+
+    assert main.duration == Metric.estimated(5)
+
+
+def test_agent_summary_counts_resumes_and_drops_placeholder_models() -> None:
+    agent = Node(
+        node_id="agent",
+        kind=NodeKind.AGENT,
+        topic="a",
+        agent_uuid="a-id",
+        resume_times=[Metric.exact(10), Metric.exact(20)],
+        llm_calls=[
+            LlmCall(start=Metric.exact(1), model="real-model"),
+            LlmCall(start=Metric.exact(1), model="<synthetic>"),
+        ],
+    )
+    placeholder_only = Node(
+        node_id="other",
+        kind=NodeKind.AGENT,
+        topic="o",
+        agent_uuid="o-id",
+        llm_calls=[LlmCall(start=Metric.exact(1), model="<synthetic>")],
+    )
+    root = Node(node_id="session", kind=NodeKind.SESSION, topic="s", children=[agent, placeholder_only])
+
+    _, first, second = agent_groups(root)
+
+    assert first.resume_count == 2
+    assert first.models == ["real-model"]
+    assert second.resume_count == 0
+    assert second.models == []
+
+
+def test_agent_summary_labels_cache_ttl_from_known_write_splits() -> None:
+    def write(five: int, one: int | None) -> LlmCall:
+        return LlmCall(
+            start=Metric.exact(1),
+            tokens=Tokens(
+                cache_write=Metric.exact(five + (one or 0) or 1),
+                cache_write_5m=Metric.exact(five),
+                cache_write_1h=Metric.exact(one) if one is not None else Metric.not_available(),
+            ),
+        )
+
+    def group(*calls: LlmCall):
+        turn = Node(node_id="turn", kind=NodeKind.TURN, topic="t", llm_calls=list(calls))
+        (main,) = agent_groups(Node(node_id="s", kind=NodeKind.SESSION, topic="s", children=[turn]))
+        return main
+
+    assert group(write(5, 0), write(0, 5)).cache_ttl == "mixed"
+    assert group(write(0, 5)).cache_ttl == "1h"
+    assert group(write(5, 0), write(5, None)).cache_ttl == "unknown"
+    assert group().cache_ttl == "unknown"

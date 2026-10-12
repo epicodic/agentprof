@@ -3,11 +3,29 @@
 
 import { expect, type Page, test } from "@playwright/test";
 import type { NodeDetailOut, SessionOut } from "../../src/api/types";
-import { withCallKeys } from "../../src/test/callKeys";
-import { cost, makeCall, makeNode, metric, tokens } from "../../src/test/factories";
+import { cost, makeAgentRow, makeCall, makeNode, metric, tokens } from "../../src/test/factories";
+import { served } from "../../src/test/served";
 import { deepWorkflow } from "../../src/test/workflowFixtures";
 
 export const WORKFLOW_SESSION = "claude-code:11111111-1111-4111-8111-111111111111";
+/** The server sums the resumed agent's two owners; `served` rows carry no metrics, so give agent 202 its totals. */
+function withResumedAgentMetrics(session: SessionOut, resumedAgent: boolean): SessionOut {
+  if (!resumedAgent) return session;
+  const index = session.agents.findIndex((agent) => agent.agent_id === 202);
+  if (index < 0) return session;
+  session.agents[index] = {
+    ...makeAgentRow(),
+    agent_id: 202,
+    harness_agent_id: session.agents[index].harness_agent_id,
+    topic: session.agents[index].topic,
+    models: session.agents[index].models,
+    tokens_in_out: metric(36),
+    tokens: { ...makeAgentRow().tokens, input: metric(24), output: metric(12) },
+    own_cost: cost(5, "USD"),
+  };
+  return session;
+}
+
 const workflowDetailFailures = new WeakMap<Page, string[]>();
 const workflowSyntheticNodeIds = new WeakMap<Page, Set<string>>();
 const workflowPublicNodeIds = new WeakMap<Page, Set<string>>();
@@ -126,7 +144,7 @@ export async function installDeepWorkflow(
       await route.fulfill({
         status: response.status(),
         headers: response.headers(),
-        json: withCallKeys(session),
+        json: withResumedAgentMetrics(served(session), resumedAgent),
       });
       return;
     }

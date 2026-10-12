@@ -6,6 +6,7 @@ from agentprof.adapters.base import AgentAdapter, SessionRef
 from agentprof.analysis.call_context import annotate_call_context
 from agentprof.analysis.evidence_findings import find_evidence_findings
 from agentprof.analysis.execution import resolve_execution_links
+from agentprof.analysis.finding_order import rank_findings
 from agentprof.analysis.heuristics import find_findings
 from agentprof.analysis.identity import assign_call_keys
 from agentprof.analysis.rollup import roll_up
@@ -30,4 +31,5 @@ def analyze(adapter: AgentAdapter, ref: SessionRef) -> Session:
     roll_up(session.root)
     annotate_call_context(session.root)
     attach_findings(session.root, [*find_findings(session.root), *find_evidence_findings(session.root)])
+    rank_findings(session.root)
     return session

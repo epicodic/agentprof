@@ -16,6 +16,8 @@ class AgentGroup:
     topic: str
     models: list[str]
     llm_calls: Metric
+    duration: Metric
+    tokens_in_out: Metric
     context_peak: Metric
     tokens: Tokens
     own_cost: CostMetric
@@ -114,6 +116,7 @@ def agent_groups(root: Node) -> list[AgentGroup]:
             )
             for call in cold_calls
         ]
+        tokens = sum_tokens([node.tokens for node in nodes])
         groups.append(
             AgentGroup(
                 agent_id=agent_id,
@@ -122,12 +125,14 @@ def agent_groups(root: Node) -> list[AgentGroup]:
                 topic=representative.topic,
                 models=models,
                 llm_calls=sum_metrics(counts),
+                duration=sum_metrics([node.duration for node in nodes]),
+                tokens_in_out=sum_metrics([tokens.input, tokens.output]),
                 context_peak=(
                     root.context_peak
                     if agent_id == 1
                     else extreme_metric([node.context_peak for node in nodes], greatest=True)
                 ),
-                tokens=sum_tokens([node.tokens for node in nodes]),
+                tokens=tokens,
                 own_cost=sum_costs([node.cost_own for node in nodes]),
                 subtree_cost=sum_costs([node.cost_total for node in tops[agent_id]]),
                 start=extreme_metric([node.start for node in nodes], greatest=False),

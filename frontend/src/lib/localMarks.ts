@@ -4,7 +4,7 @@
 import type { FindingOut, NodeOut } from "../api/types";
 import { artifacts } from "./artifacts";
 import { findingKey } from "./findingGroups";
-import { allFindings, sortFindings } from "./tree";
+import { rankedFindings } from "./tree";
 
 export interface LocalMark {
   viewKey: string;
@@ -40,7 +40,7 @@ export function preserveSafeLocalMark(mark: LocalMark, oldRoot: NodeOut, nextRoo
     return previousCount === 1 && nextCount === 1 ? mark : null;
   }
   if (mark.viewKey === "session-findings") {
-    const previous = sortFindings(allFindings(oldRoot)).map((finding, index) => ({
+    const previous = rankedFindings(oldRoot).map((finding, index) => ({
       finding,
       key: findingKey(finding, index),
     }));
@@ -48,7 +48,7 @@ export function preserveSafeLocalMark(mark: LocalMark, oldRoot: NodeOut, nextRoo
     if (marked.length !== 1) return null;
     const target = findingSignature(marked[0].finding);
     if (previous.filter((item) => findingSignature(item.finding) === target).length !== 1) return null;
-    const matches = sortFindings(allFindings(nextRoot))
+    const matches = rankedFindings(nextRoot)
       .map((finding, index) => ({ finding, key: findingKey(finding, index) }))
       .filter((item) => findingSignature(item.finding) === target);
     return matches.length === 1 ? { viewKey: mark.viewKey, key: matches[0].key } : null;

@@ -169,7 +169,7 @@ def find_evidence_findings(root: Node) -> list[Finding]:
                     event.kind == "tool"
                     and tool_node is not None
                     and tool_node.tool is not None
-                    and tool_node.tool.native_id.casefold() == "askuserquestion"
+                    and tool_node.tool.blocks_on_user
                     and event.duration.value is not None
                     and event.duration.number() >= _BLOCKING_WAIT_MS
                 ):

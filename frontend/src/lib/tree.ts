@@ -17,8 +17,6 @@ export interface TreeRow {
   expanded: boolean;
 }
 
-const SEVERITY_RANK: Record<string, number> = { high: 0, medium: 1, low: 2 };
-
 /** The session, turns and agents are tree rows; tool calls never are. */
 export function isRowNode(node: NodeOut): boolean {
   return node.kind !== "tool";
@@ -155,18 +153,17 @@ export function turns(node: NodeOut): TimedChild[] {
   return timedChildren(node, "turn");
 }
 
-export function allFindings(root: NodeOut): FindingOut[] {
+function allFindings(root: NodeOut): FindingOut[] {
   const findings: FindingOut[] = [...root.findings];
   for (const child of root.children) findings.push(...allFindings(child));
   return findings;
 }
 
-export function sortFindings(findings: FindingOut[]): FindingOut[] {
-  return [...findings].sort(
-    (a, b) =>
-      (SEVERITY_RANK[a.severity] ?? 9) - (SEVERITY_RANK[b.severity] ?? 9) ||
-      a.heuristic_id.localeCompare(b.heuristic_id),
-  );
+const UNRANKED = Number.MAX_SAFE_INTEGER;
+
+/** Every finding in the tree in the server's order; findings without a rank follow in tree order. */
+export function rankedFindings(root: NodeOut): FindingOut[] {
+  return allFindings(root).sort((a, b) => (a.rank ?? UNRANKED) - (b.rank ?? UNRANKED));
 }
 
 export function countLlmCalls(root: NodeOut): number {

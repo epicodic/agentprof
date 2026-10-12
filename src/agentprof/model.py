@@ -239,6 +239,7 @@ class ToolInfo:
     """A tool call's native identity, neutral category and normalised arguments.
 
     `writes_file` is true for tools that write a whole file (as opposed to editing part of one).
+    `blocks_on_user` is true for tools that wait for the user to answer (for example a question prompt).
     `paths` lists every file the call touches, `path` is the first of them; it defaults to `path` alone.
     """
 
@@ -253,6 +254,7 @@ class ToolInfo:
     target_agent_id: str | None = None
     is_resume: bool = False
     linked_agent_node_id: str | None = None
+    blocks_on_user: bool = False
 
     def __post_init__(self) -> None:
         if not self.paths and self.path is not None:
@@ -340,7 +342,10 @@ class TranscriptCoverage:
 
 @dataclass
 class Finding:
-    """A waste heuristic hit, attached to a node."""
+    """A waste heuristic hit, attached to a node.
+
+    `rank` is the finding's position in the session's findings list, set by the pipeline.
+    """
 
     heuristic_id: str
     node_id: str
@@ -351,6 +356,7 @@ class Finding:
     references: list[FindingReference] = field(default_factory=list)
     observed_cost: CostMetric = field(default_factory=CostMetric.not_available)
     avoidable_cost_baseline: str | None = None
+    rank: int | None = None
 
 
 @dataclass

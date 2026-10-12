@@ -4,7 +4,6 @@
 import { describe, expect, it } from "vitest";
 import { makeCall, makeNode, makeTool, metric } from "../test/factories";
 import { deepWorkflow } from "../test/workflowFixtures";
-import { agentSummaryRows } from "./agentSummary";
 import { buildWorkflowIndex, resolveWorkflowScope, workflowAncestors, workflowVisibility } from "./workflowScope";
 
 describe("buildWorkflowIndex", () => {
@@ -37,7 +36,7 @@ describe("buildWorkflowIndex", () => {
       llm_calls: [makeCall({ call_id: "resume-request", start: metric(2000) })],
     });
     root.children[0].children.push(resumed);
-    const summaryBefore = JSON.stringify(agentSummaryRows(root));
+    const treeBefore = JSON.stringify(root);
     const metricsBefore = JSON.stringify([root.cost_total, root.tokens_total, resumed.cost_own]);
     const index = buildWorkflowIndex(root);
     expect(index.depths.get("deep-20")).toBe(22);
@@ -48,7 +47,7 @@ describe("buildWorkflowIndex", () => {
     expect(index.agentObservations.get(9)?.latest?.ownerId).toBe("resumed");
     expect(index.items.filter((item) => item.ownerId === "resumed")).toHaveLength(1);
     expect(JSON.stringify([root.cost_total, root.tokens_total, resumed.cost_own])).toBe(metricsBefore);
-    expect(JSON.stringify(agentSummaryRows(root))).toBe(summaryBefore);
+    expect(JSON.stringify(root)).toBe(treeBefore);
     expect(workflowAncestors(index, "missing")).toEqual([]);
   });
 

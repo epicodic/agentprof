@@ -30,7 +30,9 @@ src/agentprof/
     heuristics.py         # waste heuristics W1–W5, W7, W8
     evidence_findings.py  # evidence findings E1–E7
     finding_references.py # stable node, call and event references cited by findings
-    agent_summary.py      # one row per logical agent for `/summary`
+    agent_summary.py      # one row per logical agent for `/summary` and `SessionOut.agents`
+    activity.py           # running/waiting state per node
+    finding_order.py      # findings order and `Finding.rank`
     transcripts.py        # transcript scoping, ordering, paging and search
   server/
     app.py                # FastAPI app, SSE broadcaster, static file serving
@@ -77,12 +79,6 @@ Keep these boundaries:
 - The server only translates the neutral model into response schemas.
 - The frontend sees only the API; its types are generated from the OpenAPI schema.
 
-Known exceptions, to be removed rather than copied:
-
-- `evidence_findings.py` detects a blocking user wait (E2) by the Claude Code tool id `AskUserQuestion`.
-- `server/schemas.py` derives node activity (`active`, `active_descendant`, `activity`).
-- `server/app.py` orders the flat findings list and builds the `depth`/`fields` projection.
-
 ## Components
 
 ### Neutral model (`model.py`)
@@ -115,6 +111,7 @@ Known exceptions, to be removed rather than copied:
 
 - `ToolInfo.category` is the neutral class heuristics use; `native_id` keeps the agent's own name.
 - `ToolInfo.paths` lists every file a call touches; `writes_file` marks whole-file writes.
+- `ToolInfo.blocks_on_user` marks a call that waits for the user's answer; adapters set it, analysis never matches tool ids.
 - A resume links to an agent node only when its target matches exactly one harness agent id.
 
 **Execution events**
@@ -169,6 +166,7 @@ Its steps mutate the tree in place, and their order matters:
 5. `call_context.annotate_call_context` sets `gap`, `preceding_events` and `cold_rewrite` on each call.
 6. `heuristics.find_findings` and `evidence_findings.find_evidence_findings` produce findings.
 7. Findings are attached to the nodes they name.
+8. `finding_order.rank_findings` stores each finding's position in the session order on `Finding.rank`.
 
 Compactions:
 
@@ -183,6 +181,8 @@ Findings:
 - Findings cite nodes, calls and events through `finding_references`.
 - `identity.call_keys` is the only definition of a call's key: a unique native id, else a unique exact timestamp, else none.
 - `identity.owned_nodes` is the only definition of a node's logical agent owner.
+- `finding_order.ordered_findings` is the only definition of the findings order: known avoidable USD, severity, then event time.
+- `activity.node_activity` is the only definition of a node's running or waiting state; the frontier is the root's end.
 - Observed cost and estimated avoidable cost are kept separate.
 - Finding costs must not be summed: several findings may cite the same call.
 
@@ -207,9 +207,9 @@ Findings:
 | `GET /api/sessions` | all rows as `SummaryOut`, newest first |
 | `GET /api/sessions/events` | SSE: `updated` (a `SummaryOut`) and `removed` (`{id}`) |
 | `GET /api/pricing` | effective price table |
-| `GET /api/sessions/{id}` | `SessionOut`: full tree with metrics and findings, no long texts; optional `depth` and `fields` |
+| `GET /api/sessions/{id}` | `SessionOut`: full tree with metrics, findings and the agent rows, no long texts; optional `depth` and `fields` |
 | `GET /api/sessions/{id}/summary` | one row per logical agent with cost and cache breakdowns |
-| `GET /api/sessions/{id}/findings` | flat findings by avoidable cost, severity and time |
+| `GET /api/sessions/{id}/findings` | flat findings in `analysis/finding_order.py` order |
 | `GET /api/sessions/{id}/diagnostics` | parse counts and redacted malformed-line details |
 | `GET /api/sessions/{id}/nodes/{node_id}` | prompt, result and raw tool arguments |
 | `GET /api/sessions/{id}/transcript` | a window of entry metadata (default 50, max 100) with cursors |
@@ -225,6 +225,8 @@ Behaviour:
 - Transcript cursors are bound to session, scope, query and filter; a vanished cursor entry returns 409.
 - Without `node_id`, transcript listing and search cover the whole session; with it, the node's ownership scope.
 - The `Broadcaster` moves registry events from the worker thread onto the asyncio loop, one queue per SSE client.
+- `schemas.py` builds the `depth`/`fields` projection; `app.py` maps its `ValueError` to 422.
+- `SessionOut.agents` embeds the same rows as `/summary`.
 - `/summary` `own_cost` can be summed across rows; `subtree_cost` cannot.
 - Requests whose `Host` header is not a loopback name or the bound host return 400 (protection against DNS rebinding); a wildcard bind (`0.0.0.0`, `::`) disables the check.
 
@@ -249,9 +251,9 @@ components/
     WorkflowToolbar     scope, activity filter and follow-latest controls
     WorkflowBreadcrumbs focused scope hierarchy
     WorkflowStatus      workflow state capsule
-    AgentSummaryTable   one row per logical agent
+    AgentSummaryTable   one row per logical agent, from `session.agents`
     AgentBadge          agent id capsule
-    FindingsDrawer      all findings of the session
+    FindingsDrawer      all findings of the session, in server rank order
   tree and timeline
     TreeTimeline        virtualised tree table with timeline column
     ContextCell         peak context cell
@@ -286,7 +288,7 @@ lib/                pure functions, no React
   workflowState, workflowScope, workflowReading     observed state, scope, reading anchor
   executionSequence, toolExecutions, inspectionSequence, llmCallRows, eventRelations   call sequence
   timeline, drawerTimeDomain, chartScale, context, cost, cache   chart geometry and figures
-  agentSummary, agentColor, metricColor, artifacts, transcript, localMarks, entityHitGroups
+  agentColor, metricColor, artifacts, transcript, localMarks, entityHitGroups
   filters, paging, splitPane, format, severity
 api/                client, query hooks, SSE, types
 ```
@@ -299,6 +301,7 @@ api/                client, query hooks, SSE, types
 - Queries never go stale by themselves (`staleTime: Infinity`); only server events refresh data.
 - The UI uses only the list, session, node and transcript endpoints.
 - The frontend never computes call keys; it reads `call_key` from the API, and tests key synthetic sessions with `src/test/callKeys.ts`.
+- It reads agent rows from `session.agents` and finding order from `rank` (`rankedFindings` in `lib/tree.ts`); tests build both for synthetic sessions with `served()` from `src/test/served.ts`.
 
 | Query key | Data |
 |---|---|
@@ -402,6 +405,11 @@ file changes -> worker emits "updated" with newer mtime -> frontend refetches th
 - **Session-view switch:** keep its state in `SessionView` and expose it in a toolbar or the header.
 - **Timeline mark:** add its geometry to `lib/timeline.ts` with a test and draw it in `ActivityTrack`.
 - **New value:** change the API first.
+
+### Add an agent-table column
+
+Add the value to `AgentGroup` in `analysis/agent_summary.py` and to `AgentSummaryRowOut` in `server/schemas.py`, regenerate the schema, and show it in `AgentSummaryTable`.
+Update `src/test/agentRows.ts` so synthetic sessions get it too.
 
 ### Add a derived metric
 

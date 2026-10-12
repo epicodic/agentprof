@@ -228,6 +228,13 @@ def test_findings_endpoint_flattens_attached_findings() -> None:
     assert TestClient(create_app(registry)).get("/api/sessions/claude-code:missing/findings").status_code == 404
 
 
+def test_findings_endpoint_ranks_follow_the_list_order() -> None:
+    items = TestClient(create_app(_registry())).get(f"/api/sessions/{_SESSION_ID}/findings").json()
+
+    assert items
+    assert [item["rank"] for item in items] == list(range(len(items)))
+
+
 def test_findings_endpoint_sorts_unknown_cost_by_severity_then_time() -> None:
     registry = _registry()
     session, _ = registry.session(_SESSION_ID)

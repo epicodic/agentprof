@@ -40,7 +40,7 @@ def test_large_rewrite_finding_uses_measured_call_evidence() -> None:
     assert findings[0].evidence["provenance"] == "exact"
 
 
-def test_blocking_wait_after_rewrite_requires_timed_ask_user_tool() -> None:
+def _rewrite_after_wait(tool: ToolInfo) -> Node:
     call = LlmCall(
         start=Metric.exact(700_000),
         call_id="call-2",
@@ -49,17 +49,26 @@ def test_blocking_wait_after_rewrite_requires_timed_ask_user_tool() -> None:
         cold_rewrite=True,
         preceding_events=[CallEvent("tool", "ask", Metric.exact(10), Metric.exact(610_000), Metric.exact(600_000))],
     )
-    ask = Node(
-        node_id="ask",
-        kind=NodeKind.TOOL,
-        topic="ask",
-        tool=ToolInfo(native_id="AskUserQuestion", category=ToolCategory.OTHER),
-    )
+    ask = Node(node_id="ask", kind=NodeKind.TOOL, topic="ask", tool=tool)
     turn = Node(node_id="turn", kind=NodeKind.TURN, topic="t", llm_calls=[call], children=[ask])
-    root = Node(node_id="root", kind=NodeKind.SESSION, topic="s", children=[turn])
+    return Node(node_id="root", kind=NodeKind.SESSION, topic="s", children=[turn])
+
+
+def test_blocking_wait_after_rewrite_requires_timed_ask_user_tool() -> None:
+    root = _rewrite_after_wait(ToolInfo(native_id="AskUserQuestion", category=ToolCategory.OTHER, blocks_on_user=True))
 
     assert [finding.heuristic_id for finding in find_evidence_findings(root)] == ["E1", "E2"]
     assert find_evidence_findings(root)[1].evidence["tool_node_id"] == "ask"
+
+
+def test_blocking_wait_uses_the_neutral_flag_not_the_tool_id() -> None:
+    flagged = _rewrite_after_wait(
+        ToolInfo(native_id="vscode_askQuestions", category=ToolCategory.OTHER, blocks_on_user=True)
+    )
+    unflagged = _rewrite_after_wait(ToolInfo(native_id="AskUserQuestion", category=ToolCategory.OTHER))
+
+    assert [finding.heuristic_id for finding in find_evidence_findings(flagged)] == ["E1", "E2"]
+    assert [finding.heuristic_id for finding in find_evidence_findings(unflagged)] == ["E1"]
 
 
 def test_large_write_without_low_cache_read_is_not_called_cold() -> None:

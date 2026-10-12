@@ -5,7 +5,6 @@ import { describe, expect, it } from "vitest";
 import type { FindingOut } from "../api/types";
 import { makeNode, makeTool, metric } from "../test/factories";
 import {
-  allFindings,
   countLlmCalls,
   countToolCalls,
   findNode,
@@ -13,11 +12,11 @@ import {
   initialExpansion,
   navigationParentId,
   nodesWithFindings,
+  rankedFindings,
   revealKeys,
   rowFindingCount,
   rowKeyOf,
   rowNodes,
-  sortFindings,
   subAgents,
   toolCalls,
   turns,
@@ -248,14 +247,34 @@ describe("toolCalls and subAgents", () => {
 });
 
 describe("findings and counts", () => {
-  it("collects, sorts and counts", () => {
+  it("collects and counts", () => {
     const root = sampleRoot();
-    const all = [...allFindings(root), finding("turn", "W1", "medium")];
-
-    expect(sortFindings(all).map((f) => f.heuristic_id)).toEqual(["W1", "W6"]);
     expect([...nodesWithFindings(root)].sort()).toEqual(["agent", "session", "turn"]);
     expect(findNode(root, "grep")?.node_id).toBe("grep");
     expect(countToolCalls(root)).toBe(7);
     expect(countLlmCalls(root)).toBe(0);
+  });
+});
+
+describe("rankedFindings", () => {
+  it("follows the server rank and keeps unranked findings last in tree order", () => {
+    const root = makeNode({
+      node_id: "s",
+      kind: "session",
+      findings: [{ ...finding("s", "W1", "high"), rank: null }],
+      children: [
+        makeNode({
+          node_id: "u",
+          kind: "turn",
+          findings: [
+            { ...finding("u", "W6", "low"), rank: 1 },
+            { ...finding("u", "W2", "medium"), rank: 0 },
+            { ...finding("u", "W3", "low"), rank: null },
+          ],
+        }),
+      ],
+    });
+
+    expect(rankedFindings(root).map((f) => f.heuristic_id)).toEqual(["W2", "W6", "W1", "W3"]);
   });
 });

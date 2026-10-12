@@ -13,8 +13,7 @@ import {
 } from "@tanstack/react-table";
 import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useLocation } from "react-router";
-import type { NodeOut } from "../api/types";
-import { type AgentSummaryRow, agentSummaryRows } from "../lib/agentSummary";
+import type { AgentSummaryRowOut, CostOut, MetricOut, NodeOut } from "../api/types";
 import { agentNode, callRef, eventRef, relationsToNodes } from "../lib/entities";
 import { formatCost, formatDuration, formatTokens, MISSING, truncateTitle, withProvenance } from "../lib/format";
 import { colorForMetric, metricScale } from "../lib/metricColor";
@@ -30,13 +29,51 @@ import { type InspectionAction, useInspectionMenuTarget } from "./InspectionMenu
 import { useSessionInteraction } from "./SessionInteraction";
 import { WorkflowStatus } from "./WorkflowStatus";
 
+interface AgentRow {
+  agentId: number;
+  topic: string;
+  active: boolean;
+  /** Distinct models the server reports for the agent, comma-joined; `null` if none are known. */
+  model: string | null;
+  duration: MetricOut;
+  cost: CostOut;
+  /** This row's cost as a percentage of the total cost across all agents; `null` if not computable. */
+  costPercent: number | null;
+  tokensTotal: MetricOut;
+  tokensInput: MetricOut;
+  tokensOutput: MetricOut;
+  cacheTtl: string;
+  resumeCount: number;
+}
+
+function tableRows(agents: readonly AgentSummaryRowOut[], nodes: ReadonlyMap<number, NodeOut>): AgentRow[] {
+  const totalCost = agents.reduce((sum, agent) => sum + (agent.own_cost.usd ?? 0), 0);
+  return agents.map((agent) => {
+    const node = nodes.get(agent.agent_id);
+    return {
+      agentId: agent.agent_id,
+      topic: agent.topic,
+      active: node !== undefined && (node.active || node.active_descendant),
+      model: agent.models.length > 0 ? agent.models.join(", ") : null,
+      duration: agent.duration,
+      cost: agent.own_cost,
+      costPercent: agent.own_cost.usd === null || totalCost <= 0 ? null : (agent.own_cost.usd / totalCost) * 100,
+      tokensTotal: agent.tokens_in_out,
+      tokensInput: agent.tokens.input,
+      tokensOutput: agent.tokens.output,
+      cacheTtl: agent.cache_ttl,
+      resumeCount: agent.resume_count,
+    };
+  });
+}
+
 function sortMark(direction: false | "asc" | "desc"): string {
   if (direction === "asc") return " ▲";
   if (direction === "desc") return " ▼";
   return "";
 }
 
-function formatCostWithPercent(row: AgentSummaryRow): string {
+function formatCostWithPercent(row: AgentRow): string {
   const text = withProvenance(formatCost(row.cost), row.cost);
   return row.costPercent === null ? text : `${text} (${Math.round(row.costPercent)}%)`;
 }
@@ -78,14 +115,14 @@ function agentsInScope(index: WorkflowIndex, scopeId: string | null): Set<number
 }
 
 function columns(
-  rows: AgentSummaryRow[],
+  rows: AgentRow[],
   nodesByAgent: Map<number, NodeOut>,
   observations: Map<number, WorkflowObservation>,
   workflowIndex: WorkflowIndex,
   interaction: ReturnType<typeof useSessionInteraction>,
   onSelectAgent: (agentId: number) => void,
   sessionId: string | null,
-): ColumnDef<AgentSummaryRow>[] {
+): ColumnDef<AgentRow>[] {
   const durationScale = metricScale(rows.map((row) => row.duration.value));
   const costScale = metricScale(rows.map((row) => row.cost.usd));
   const tokensTotalScale = metricScale(rows.map((row) => row.tokensTotal.value));
@@ -297,6 +334,7 @@ function columns(
 /** One row per agent identified anywhere in the tree, with its total duration, own cost and own tokens. */
 export function AgentSummaryTable({
   root,
+  agents,
   onSelectAgent,
   workflowIndex: suppliedWorkflowIndex,
   activityFilter = "all",
@@ -307,6 +345,7 @@ export function AgentSummaryTable({
   hierarchyMatchCount,
 }: {
   root: NodeOut;
+  agents: AgentSummaryRowOut[];
   onSelectAgent: (agentId: number) => void;
   workflowIndex?: WorkflowIndex;
   activityFilter?: ActivityFilter;
@@ -318,7 +357,15 @@ export function AgentSummaryTable({
 }) {
   const isPhone = useMediaQuery("(max-width: 48em)");
   const routerLocation = useLocation();
-  const allRows = useMemo(() => agentSummaryRows(root), [root]);
+  const nodesByAgent = useMemo(() => {
+    const nodes = new Map<number, NodeOut>();
+    for (const agent of agents) {
+      const node = agentNode(root, agent.agent_id);
+      if (node !== null) nodes.set(agent.agent_id, node);
+    }
+    return nodes;
+  }, [agents, root]);
+  const allRows = useMemo(() => tableRows(agents, nodesByAgent), [agents, nodesByAgent]);
   const workflowIndex = useMemo(() => suppliedWorkflowIndex ?? buildWorkflowIndex(root), [root, suppliedWorkflowIndex]);
   const observations = workflowIndex.agentObservations;
   const scopedAgentIds = useMemo(() => agentsInScope(workflowIndex, scopeId), [scopeId, workflowIndex]);
@@ -334,14 +381,6 @@ export function AgentSummaryTable({
   const interaction = useSessionInteraction();
   const selectionRef = interaction?.location.selection ?? null;
   const resolvedSelection = interaction?.resolved ?? null;
-  const nodesByAgent = useMemo(() => {
-    const nodes = new Map<number, NodeOut>();
-    for (const row of rows) {
-      const node = agentNode(root, row.agentId);
-      if (node !== null) nodes.set(row.agentId, node);
-    }
-    return nodes;
-  }, [rows, root]);
   const selectionRelations = useMemo(
     () => relationsToNodes(root, selectionRef, resolvedSelection),
     [root, selectionRef, resolvedSelection],

@@ -38,7 +38,6 @@ from agentprof.model import (
 )
 from agentprof.pricing import PriceTable, Usage
 
-_ASK_USER_TOOL = "AskUserQuestion"
 _TOPIC_KEYS = ("description", "file_path", "notebook_path", "command", "pattern", "url", "query")
 _TOPIC_LENGTH = 200
 _SYNTHETIC_TURN_ID = "turn-1"
@@ -293,7 +292,7 @@ def _turn(
     waits = [
         child.duration.number()
         for child in children
-        if child.tool is not None and child.tool.native_id == _ASK_USER_TOOL and child.duration.value is not None
+        if child.tool is not None and child.tool.blocks_on_user and child.duration.value is not None
     ]
     return Node(
         node_id=prompt.uuid,

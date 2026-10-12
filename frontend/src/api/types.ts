@@ -7,6 +7,7 @@ type Schemas = components["schemas"];
 
 export type SummaryOut = Schemas["SummaryOut"];
 export type SessionOut = Schemas["SessionOut"];
+export type AgentSummaryRowOut = Schemas["AgentSummaryRowOut"];
 export type NodeOut = Schemas["NodeOut"];
 export type NodeDetailOut = Schemas["NodeDetailOut"];
 export type MetricOut = Schemas["MetricOut"];

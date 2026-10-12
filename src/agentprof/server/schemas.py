@@ -2,10 +2,12 @@
 # Copyright (c) 2026 epicodic
 """API response models and their mapping from the neutral model and registry rows."""
 
+from collections.abc import Mapping
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from agentprof.analysis.activity import NodeActivity, node_activity
 from agentprof.analysis.agent_summary import AgentGroup, agent_groups, agent_ids
 from agentprof.model import (
     CallEvent,
@@ -19,14 +21,11 @@ from agentprof.model import (
     Metric,
     Node,
     NodeKind,
-    Provenance,
     Session,
     Tokens,
     ToolInfo,
 )
 from agentprof.registry import RowState, SessionRow
-
-_ACTIVE_KINDS = (NodeKind.TURN, NodeKind.AGENT)
 
 
 class MetricOut(BaseModel):
@@ -140,6 +139,7 @@ class FindingOut(BaseModel):
     references: list[FindingReferenceOut] = Field(default_factory=list)
     observed_cost: CostOut = Field(default_factory=lambda: CostOut(value=None, unit=None, usd=None, provenance="n/a"))
     avoidable_cost_baseline: str | None = None
+    rank: int | None = None
 
 
 class NodeOut(BaseModel):
@@ -190,6 +190,30 @@ class DiagnosticsDetailOut(DiagnosticsOut):
     malformed_line_details: list[MalformedLineDetailOut]
 
 
+class AgentSummaryRowOut(BaseModel):
+    agent_id: int
+    harness_agent_id: str | None
+    parent_agent_id: int | None
+    topic: str
+    models: list[str]
+    llm_calls: MetricOut
+    duration: MetricOut
+    tokens_in_out: MetricOut
+    context_peak: MetricOut
+    tokens: TokensOut
+    own_cost: CostOut
+    subtree_cost: CostOut
+    start: MetricOut
+    end: MetricOut
+    cost_parts: dict[str, CostOut]
+    cache_ttl: str
+    cold_rewrites: MetricOut
+    cold_rewrite_cost: CostOut
+    longest_gap: MetricOut
+    findings_count: int
+    resume_count: int
+
+
 class SessionOut(BaseModel):
     id: str
     agent: str
@@ -198,6 +222,7 @@ class SessionOut(BaseModel):
     mtime: float
     sources: list[str]
     diagnostics: DiagnosticsOut
+    agents: list[AgentSummaryRowOut]
     root: NodeOut
 
 
@@ -252,28 +277,6 @@ class ApiEndpointOut(BaseModel):
 
 class ApiIndexOut(BaseModel):
     endpoints: list[ApiEndpointOut]
-
-
-class AgentSummaryRowOut(BaseModel):
-    agent_id: int
-    harness_agent_id: str | None
-    parent_agent_id: int | None
-    topic: str
-    models: list[str]
-    llm_calls: MetricOut
-    context_peak: MetricOut
-    tokens: TokensOut
-    own_cost: CostOut
-    subtree_cost: CostOut
-    start: MetricOut
-    end: MetricOut
-    cost_parts: dict[str, CostOut]
-    cache_ttl: str
-    cold_rewrites: MetricOut
-    cold_rewrite_cost: CostOut
-    longest_gap: MetricOut
-    findings_count: int
-    resume_count: int
 
 
 class AgentSummaryOut(BaseModel):
@@ -386,6 +389,7 @@ def finding_out(finding: Finding) -> FindingOut:
         references=[finding_reference_out(reference) for reference in finding.references],
         observed_cost=cost_out(finding.observed_cost),
         avoidable_cost_baseline=finding.avoidable_cost_baseline,
+        rank=finding.rank,
     )
 
 
@@ -399,39 +403,19 @@ def finding_reference_out(reference: FindingReference) -> FindingReferenceOut:
     )
 
 
-def activity_flags(root: Node, frontier: float | None) -> dict[int, tuple[bool, bool]]:
-    """Compute activity over the complete neutral tree for bounded projections."""
-    flags: dict[int, tuple[bool, bool]] = {}
-
-    def visit(node: Node) -> bool:
-        descendant = any([visit(child) for child in node.children])
-        active = (
-            node.kind is not NodeKind.SESSION
-            and node.start.value is not None
-            and node.end.provenance is not Provenance.EXACT
-            and (frontier is None or node.end.value is None or node.end.number() >= frontier)
-        )
-        flags[id(node)] = (active, descendant)
-        return (node.kind in _ACTIVE_KINDS and active) or descendant
-
-    visit(root)
-    return flags
-
-
 def node_out(
     node: Node,
     agent_ids: dict[str, int] | None = None,
     owning_agent_id: int = 1,
-    frontier: float | None = None,
     max_depth: int | None = None,
-    activity_flags: dict[int, tuple[bool, bool]] | None = None,
+    activity: Mapping[int, NodeActivity] | None = None,
 ) -> NodeOut:
     """The node and its subtree, without prompt, result and tool-argument texts.
 
-    `frontier` is the session's latest known timestamp (the root's rolled-up end); a node whose own end falls
-    short of it has already been overtaken by later activity elsewhere and is therefore not active, even when
-    that end is not `EXACT` (e.g. an adapter that never recorded one for a completed node).
+    `activity` is the precomputed activity of the complete tree; it defaults to `node_activity(node)`, so a bounded
+    projection keeps the activity of the descendants it omits.
     """
+    activity = node_activity(node) if activity is None else activity
     agent_ids = agent_ids or {}
     agent_id = (
         agent_ids.get(node.agent_uuid or node.node_id, owning_agent_id)
@@ -444,41 +428,22 @@ def node_out(
                 child,
                 agent_ids,
                 agent_id,
-                frontier,
                 None if max_depth is None else max_depth - 1,
-                activity_flags,
+                activity,
             )
             for child in node.children
         ]
         if max_depth != 0
         else []
     )
-    active = (
-        node.kind is not NodeKind.SESSION
-        and node.start.value is not None
-        and node.end.provenance is not Provenance.EXACT
-        and (frontier is None or node.end.value is None or node.end.number() >= frontier)
-    )
-    # A tool node is never itself an activity indicator, but a sub-agent nested under one still counts.
-    active_descendant = any(
-        (child.kind in _ACTIVE_KINDS and child.active) or child.active_descendant for child in children
-    )
-    if activity_flags is not None:
-        active, active_descendant = activity_flags[id(node)]
-    activity = (
-        "waiting"
-        if node.kind in _ACTIVE_KINDS and active_descendant
-        else "running"
-        if node.kind in _ACTIVE_KINDS and active
-        else None
-    )
+    flags = activity[id(node)]
     return NodeOut(
         node_id=node.node_id,
         agent_id=agent_id,
         harness_agent_id=node.agent_uuid if node.kind is NodeKind.AGENT else None,
-        active=active,
-        active_descendant=active_descendant,
-        activity=activity,
+        active=flags.active,
+        active_descendant=flags.active_descendant,
+        activity=flags.activity,
         kind=node.kind.value,
         topic=node.topic,
         model=node.model,
@@ -530,6 +495,10 @@ def diagnostics_detail_out(diagnostics: Diagnostics) -> DiagnosticsDetailOut:
     )
 
 
+def _agent_rows(session: Session) -> list[AgentSummaryRowOut]:
+    return [agent_summary_row_out(group) for group in agent_groups(session.root)]
+
+
 def session_out(session: Session, mtime: float) -> SessionOut:
     return SessionOut(
         id=session.id,
@@ -539,7 +508,8 @@ def session_out(session: Session, mtime: float) -> SessionOut:
         mtime=mtime,
         sources=session.sources,
         diagnostics=diagnostics_out(session.diagnostics),
-        root=node_out(session.root, agent_ids(session.root), frontier=session.root.end.value),
+        agents=_agent_rows(session),
+        root=node_out(session.root, agent_ids(session.root)),
     )
 
 
@@ -551,6 +521,8 @@ def agent_summary_row_out(group: AgentGroup) -> AgentSummaryRowOut:
         topic=group.topic,
         models=group.models,
         llm_calls=metric_out(group.llm_calls),
+        duration=metric_out(group.duration),
+        tokens_in_out=metric_out(group.tokens_in_out),
         context_peak=metric_out(group.context_peak),
         tokens=tokens_out(group.tokens),
         own_cost=cost_out(group.own_cost),
@@ -572,7 +544,7 @@ def agent_summary_out(session: Session, mtime: float) -> AgentSummaryOut:
         schema_version=1,
         id=session.id,
         mtime=mtime,
-        agents=[agent_summary_row_out(group) for group in agent_groups(session.root)],
+        agents=_agent_rows(session),
     )
 
 
@@ -603,3 +575,43 @@ def summary_out(row: SessionRow) -> SummaryOut:
         cost_total=cost_out(summary.cost_total) if summary is not None else None,
         error=row.error if state is RowState.ERROR else None,
     )
+
+
+_SESSION_FIELDS = ("session", "diagnostics", "tree")
+
+
+def _mark_omitted(node: dict[str, Any], source: Node, depth: int) -> None:
+    """Mark omitted descendants on a tree already mapped only to `depth`."""
+    node["children_omitted"] = bool(source.children) if depth == 0 else False
+    if depth > 0:
+        for mapped, child in zip(node["children"], source.children, strict=True):
+            _mark_omitted(mapped, child, depth - 1)
+
+
+def projected_session_out(session: Session, mtime: float, depth: int | None, fields: str | None) -> dict[str, Any]:
+    """Select documented top-level groups and optionally bound tree depth; `ValueError` on unknown `fields`."""
+    selected = _SESSION_FIELDS if fields is None else tuple(part.strip() for part in fields.split(","))
+    if not selected or any(part not in _SESSION_FIELDS for part in selected):
+        raise ValueError("fields must contain: session, diagnostics, tree")
+    projected: dict[str, Any] = {}
+    if "session" in selected:
+        projected.update(
+            id=session.id,
+            agent=session.agent,
+            title=session.title,
+            workspace=session.workspace,
+            mtime=mtime,
+            sources=session.sources,
+        )
+    if "diagnostics" in selected:
+        projected["diagnostics"] = diagnostics_out(session.diagnostics).model_dump(mode="json")
+    if "tree" in selected:
+        root = node_out(
+            session.root,
+            agent_ids(session.root),
+            max_depth=depth,
+        ).model_dump(mode="json")
+        if depth is not None:
+            _mark_omitted(root, session.root, depth)
+        projected["root"] = root
+    return projected

@@ -98,3 +98,8 @@ def test_tool_info_marks_tools_that_write_whole_files() -> None:
     assert tool_info("copilot_createFile", {"filePath": "a.py"}).writes_file
     assert tool_info("create_file", {"filePath": "a.py"}).writes_file
     assert not tool_info("copilot_replaceString", {"filePath": "a.py"}).writes_file
+
+
+def test_ask_questions_blocks_on_user() -> None:
+    assert tool_info("vscode_askQuestions", {}).blocks_on_user
+    assert not tool_info("read_file", {}).blocks_on_user

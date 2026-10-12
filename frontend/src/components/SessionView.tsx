@@ -30,15 +30,14 @@ import { metricScale } from "../lib/metricColor";
 import { initialSplitPercent, splitPercentAfterDrag } from "../lib/splitPane";
 import { nodeSpan, zoom } from "../lib/timeline";
 import {
-  allFindings,
   findNode,
   flattenTree,
   initialExpansion,
   navigationParentId,
+  rankedFindings,
   revealKeys,
   rowKeyOf,
   rowNodes,
-  sortFindings,
 } from "../lib/tree";
 import { parseWorkflowLocation, writeWorkflowLocation } from "../lib/workflowLocation";
 import { newFollowTarget, type WorkflowAnchor } from "../lib/workflowReading";
@@ -244,7 +243,7 @@ export function SessionView({ session, fetchedAtMs }: { session: SessionOut; fet
     };
   }, [root]);
   const selectedRow = useMemo(() => (selected === null ? null : rowKeyOf(root, selected)), [root, selected]);
-  const findings = useMemo(() => sortFindings(allFindings(root)), [root]);
+  const findings = useMemo(() => rankedFindings(root), [root]);
   const span = useMemo(() => nodeSpan(root), [root]);
   const view = span === null ? null : zoom(span, range[0], range[1]);
 
@@ -906,6 +905,7 @@ export function SessionView({ session, fetchedAtMs }: { session: SessionOut; fet
               <Box ref={agentPanelScrollRef} id="agent-summary-panel" className={classes.agentsContent} p="sm">
                 <AgentSummaryTable
                   root={root}
+                  agents={session.agents}
                   workflowIndex={workflowIndex}
                   activityFilter={workflowLocation.invalidActivity ? "all" : workflowLocation.activity}
                   scopeId={requestedScope.unavailable || effectiveScopeId === root.node_id ? null : effectiveScopeId}

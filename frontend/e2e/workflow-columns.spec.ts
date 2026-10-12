@@ -2,7 +2,7 @@
 // Copyright (c) 2026 epicodic
 
 import { expect, type Locator, test } from "@playwright/test";
-import { withCallKeys } from "../src/test/callKeys";
+import { served } from "../src/test/served";
 
 const SESSION = "claude-code:11111111-1111-4111-8111-111111111111";
 
@@ -17,7 +17,7 @@ test("long workflow topics leave headings and metrics readable at desktop drawer
     const turn = session.root.children[0];
     turn.topic = `Terminal notification: ${"send_to_terminal_command_completed_".repeat(12)}`;
     turn.model = "copilot/claude-sonnet-5.5";
-    await route.fulfill({ response, json: withCallKeys(session) });
+    await route.fulfill({ response, json: served(session) });
   });
   await page.setViewportSize({ width: 1159, height: 870 });
   await page.goto(`/sessions/${encodeURIComponent(SESSION)}?node=session&tab=workflow`);

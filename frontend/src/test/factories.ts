@@ -2,6 +2,7 @@
 // Copyright (c) 2026 epicodic
 
 import type {
+  AgentSummaryRowOut,
   CostOut,
   ExecutionEventOut,
   LlmCallOut,
@@ -11,6 +12,7 @@ import type {
   SummaryOut,
   TokensOut,
 } from "../api/types";
+import { agentRows } from "./agentRows";
 import { withCallKeys } from "./callKeys";
 
 export function metric(value: number | null = null, provenance?: string): MetricOut {
@@ -148,7 +150,12 @@ export function makeSummary(overrides: Partial<SummaryOut> & { id: string }): Su
   };
 }
 
+export function makeAgentRow(overrides: Partial<AgentSummaryRowOut> = {}): AgentSummaryRowOut {
+  return { ...agentRows(makeNode({ node_id: "session", kind: "session", agent_id: 1 }))[0], ...overrides };
+}
+
 export function makeSession(root: NodeOut, mtime = 0): SessionOut {
+  const keyed = withCallKeys(root);
   return {
     id: "claude-code:s",
     agent: "claude-code",
@@ -157,6 +164,7 @@ export function makeSession(root: NodeOut, mtime = 0): SessionOut {
     mtime,
     sources: [],
     diagnostics: { malformed_lines: 0, unknown_tool_ids: {}, warnings: [] },
-    root: withCallKeys(root),
+    agents: agentRows(keyed),
+    root: keyed,
   };
 }

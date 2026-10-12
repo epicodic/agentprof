@@ -7,7 +7,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router";
 import { expect, test } from "vitest";
 import { buildWorkflowIndex } from "../lib/workflowScope";
-import { makeCall, makeNode, metric } from "../test/factories";
+import { cost, makeAgentRow, makeCall, makeNode, metric } from "../test/factories";
 import { AgentSummaryTable } from "./AgentSummaryTable";
 
 function renderTable(props: ComponentProps<typeof AgentSummaryTable>): string {
@@ -38,7 +38,12 @@ test("renders activity and topic columns with active agent badges", () => {
     ],
   });
 
-  const html = renderTable({ root, onSelectAgent: () => {} });
+  const agents = [
+    makeAgentRow({ agent_id: 1, topic: "Session title" }),
+    makeAgentRow({ agent_id: 2, topic: "Review parser", resume_count: 1 }),
+    makeAgentRow({ agent_id: 3, topic: "Completed task" }),
+  ];
+  const html = renderTable({ root, agents, onSelectAgent: () => {} });
 
   expect(html).toMatch(/<th[^>]*>Agent ▲<\/th>.*<th[^>]*>Activity<\/th>.*<th[^>]*>Topic<\/th>.*<th[^>]*>Model<\/th>/s);
   const row = (agentId: number) =>
@@ -56,7 +61,7 @@ test("renders activity and topic columns with active agent badges", () => {
   expect(row(3)).not.toContain("WAITING");
 });
 
-test("renders representative topic and latest observed activity with complete metrics", () => {
+test("renders representative topic and latest observed activity without a workflow status for unobserved state", () => {
   const oldOwner = makeNode({
     node_id: "old-agent",
     kind: "agent",
@@ -74,6 +79,7 @@ test("renders representative topic and latest observed activity with complete me
   const root = makeNode({ node_id: "session", kind: "session", children: [oldOwner, currentOwner] });
   const html = renderTable({
     root,
+    agents: [makeAgentRow({ agent_id: 2, topic: "Representative task" })],
     onSelectAgent: () => {},
     workflowIndex: buildWorkflowIndex(root),
     activityFilter: "all",
@@ -96,6 +102,10 @@ test("keeps summary counts and an enabled scope switch when no logical agents ma
   const root = makeNode({ node_id: "session", kind: "session", children: [focused, outside] });
   const html = renderTable({
     root,
+    agents: [
+      makeAgentRow({ agent_id: 9, topic: "Focused branch" }),
+      makeAgentRow({ agent_id: 2, topic: "Outside branch" }),
+    ],
     onSelectAgent: () => {},
     workflowIndex: buildWorkflowIndex(root),
     activityFilter: "running",
@@ -132,7 +142,12 @@ test("shows known timing without inventing an owner when latest activity orderin
   });
   const root = makeNode({ node_id: "session", kind: "session", children: [first, second] });
   const observation = buildWorkflowIndex(root).agentObservations.get(2);
-  const html = renderTable({ root, onSelectAgent: () => {}, workflowIndex: buildWorkflowIndex(root) });
+  const html = renderTable({
+    root,
+    agents: [makeAgentRow({ agent_id: 2, topic: "First resume" })],
+    onSelectAgent: () => {},
+    workflowIndex: buildWorkflowIndex(root),
+  });
   const knownTime = new Intl.DateTimeFormat(undefined, { dateStyle: "full", timeStyle: "long" }).format(new Date(500));
 
   expect(observation).toMatchObject({ latest: null, latestTimedAtMs: 500, taskOwnerId: null });
@@ -140,4 +155,46 @@ test("shows known timing without inventing an owner when latest activity orderin
   expect(html).toContain(knownTime);
   expect(html).not.toContain("Activity timing unavailable");
   expect(html).not.toContain("Latest task unavailable");
+});
+
+test("renders the server rows' model, cache TTL, resumes, duration, tokens and cost share", () => {
+  const root = makeNode({
+    node_id: "session",
+    kind: "session",
+    agent_id: 1,
+    children: [makeNode({ node_id: "a2", kind: "agent", agent_id: 2 })],
+  });
+  const agents = [
+    makeAgentRow({
+      agent_id: 1,
+      models: ["claude-sonnet-4", "gpt-5"],
+      cache_ttl: "mixed",
+      duration: metric(3000),
+      tokens_in_out: metric(180),
+      tokens: { ...makeAgentRow().tokens, input: metric(150), output: metric(30) },
+      own_cost: cost(0.75, "USD"),
+    }),
+    makeAgentRow({ agent_id: 2, models: [], cache_ttl: "5m", resume_count: 2, own_cost: cost(0.25, "USD") }),
+  ];
+
+  const html = renderTable({ root, agents, onSelectAgent: () => {} });
+  const row = (agentId: number) =>
+    html.match(new RegExp(`data-testid="agent-summary-row-${agentId}"[^]*?<\\/tr>`))?.[0] ?? "";
+
+  expect(row(1)).toContain("claude-sonnet-4, gpt-5");
+  expect(row(1)).toContain(">mixed<");
+  expect(row(1)).toContain("(75%)");
+  expect(row(1)).toContain("180");
+  expect(row(1)).toContain("150");
+  expect(row(1)).toContain(">30<");
+  expect(row(2)).toContain(">5m<");
+  expect(row(2)).toContain(">2<");
+  expect(row(2)).toContain("(25%)");
+});
+
+test("omits the cost share when no agent has a known cost", () => {
+  const root = makeNode({ node_id: "session", kind: "session", agent_id: 1 });
+  const html = renderTable({ root, agents: [makeAgentRow({ agent_id: 1 })], onSelectAgent: () => {} });
+
+  expect(html).not.toContain("%)");
 });

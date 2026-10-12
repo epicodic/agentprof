@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { makeNode, makeTool } from "../test/factories";
 import { findingKey } from "./findingGroups";
 import { preserveSafeLocalMark } from "./localMarks";
-import { sortFindings } from "./tree";
+import { rankedFindings } from "./tree";
 
 function edit(path: string) {
   return makeTool("edit-tool", "Edit", {
@@ -24,8 +24,9 @@ function edit(path: string) {
   });
 }
 
-function finding(message: string, severity: string = "warning", heuristicId = "W4") {
+function finding(message: string, severity: string = "warning", heuristicId = "W4", rank: number | null = null) {
   return {
+    rank,
     heuristic_id: heuristicId,
     node_id: "owner",
     severity,
@@ -56,10 +57,10 @@ describe("preserveSafeLocalMark", () => {
   });
 
   it("remaps a unique finding after sort order changes", () => {
-    const oldRoot = makeNode({ node_id: "session", findings: [finding("Marked")] });
+    const oldRoot = makeNode({ node_id: "session", findings: [finding("Marked", "warning", "W4", 1)] });
     const nextRoot = structuredClone(oldRoot);
-    nextRoot.findings.push(finding("Earlier", "warning", "A0"));
-    const oldKey = findingKey(sortFindings(oldRoot.findings)[0], 0);
+    nextRoot.findings.push(finding("Earlier", "warning", "A0", 0));
+    const oldKey = findingKey(rankedFindings(oldRoot)[0], 0);
     expect(preserveSafeLocalMark({ viewKey: "session-findings", key: oldKey }, oldRoot, nextRoot)).toEqual({
       viewKey: "session-findings",
       key: "owner:W4:Marked:1",
@@ -70,7 +71,7 @@ describe("preserveSafeLocalMark", () => {
     const oldRoot = makeNode({ node_id: "session", findings: [finding("Same"), finding("Same")] });
     const nextRoot = structuredClone(oldRoot);
     nextRoot.findings.pop();
-    const oldKey = findingKey(sortFindings(oldRoot.findings)[1], 1);
+    const oldKey = findingKey(rankedFindings(oldRoot)[1], 1);
     expect(preserveSafeLocalMark({ viewKey: "session-findings", key: oldKey }, oldRoot, nextRoot)).toBeNull();
   });
 

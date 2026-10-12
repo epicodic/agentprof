@@ -111,7 +111,7 @@ Freshness:
 
 ### Agent summary
 
-`AgentSummaryTable` shows one row per logical agent (`lib/agentSummary.ts`).
+`AgentSummaryTable` shows one row per logical agent from the server's agent rows (`SessionOut.agents`).
 
 - **Fields:** agent, activity, topic, latest activity, model, cache TTL, resumes, duration, costs, total/input/output tokens.
 - Agent 1 is the main agent, mapped to the session root, with the session title as topic.
@@ -195,7 +195,7 @@ LLM calls table:
 
 ## Findings drawer
 
-- `FindingsDrawer` lists all findings, by severity and then heuristic id.
+- `FindingsDrawer` lists all findings, in the server's order (`Finding.rank`: avoidable cost, severity, time).
 - Clicking a row marks it; the message link opens the supporting node.
 - Evidence links work as in the node view (`lib/findingReferences.ts`).
 

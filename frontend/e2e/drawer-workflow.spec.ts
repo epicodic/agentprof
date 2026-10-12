@@ -2,7 +2,7 @@
 // Copyright (c) 2026 epicodic
 
 import { expect, test } from "@playwright/test";
-import { withCallKeys } from "../src/test/callKeys";
+import { served } from "../src/test/served";
 
 const SESSION = "claude-code:11111111-1111-4111-8111-111111111111";
 
@@ -115,7 +115,7 @@ test("round-value axes keep small dollar amounts distinct and show readable toke
     call.tokens.cache_write.value = 0;
     call.in_context = true;
     turn.llm_calls = [call];
-    await route.fulfill({ response, json: withCallKeys(session) });
+    await route.fulfill({ response, json: served(session) });
   });
   await page.goto(`/sessions/${encodeURIComponent(SESSION)}?node=u1&tab=workflow`);
   const surface = page.getByTestId("workflow-charts");
@@ -155,7 +155,7 @@ test("charts share recorded call timestamps when node timing is unavailable", as
     turn.start = { value: null, provenance: "n/a" };
     turn.end = { value: null, provenance: "n/a" };
     turn.llm_calls[0].duration = { value: null, provenance: "n/a" };
-    await route.fulfill({ response, json: withCallKeys(session) });
+    await route.fulfill({ response, json: served(session) });
   });
   await page.goto(`/sessions/${encodeURIComponent(SESSION)}?node=u1&tab=workflow`);
   const surface = page.getByTestId("workflow-charts");

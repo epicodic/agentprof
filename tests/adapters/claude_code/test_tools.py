@@ -79,3 +79,8 @@ def test_tool_info_marks_tools_that_write_whole_files() -> None:
     assert tool_info("Write", {"file_path": "a.py"}).writes_file
     assert not tool_info("Edit", {"file_path": "a.py"}).writes_file
     assert not tool_info("Read", {"file_path": "a.py"}).writes_file
+
+
+def test_ask_user_question_blocks_on_user() -> None:
+    assert tool_info("AskUserQuestion", {}).blocks_on_user
+    assert not tool_info("Read", {"file_path": "/a"}).blocks_on_user

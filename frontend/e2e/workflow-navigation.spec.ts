@@ -3,8 +3,8 @@
 
 import { expect, test } from "@playwright/test";
 import type { SessionOut } from "../src/api/types";
-import { withCallKeys } from "../src/test/callKeys";
 import { makeExecutionEvent, makeNode, metric } from "../src/test/factories";
+import { served } from "../src/test/served";
 import {
   assertNoSelectionActionControls,
   consumeWorkflowDetailFailures,
@@ -313,7 +313,7 @@ test("renders recorded owner completion separately from child, tool, resume and 
         ],
       }),
     );
-    await route.fulfill({ response, json: withCallKeys(session) });
+    await route.fulfill({ response, json: served(session) });
   });
   await installWorkflowDetail(page, "state-untimed-completion");
   await page.goto(sessionUrl());

@@ -65,6 +65,8 @@ _MCP_PREFIX = "mcp_"
 _GITHUB_PULL_REQUEST_PREFIX = "github-pull-request_"
 _FILE_CATEGORIES = (ToolCategory.READ, ToolCategory.EDIT)
 _WHOLE_FILE_WRITERS = {"copilot_createFile", "create_file"}
+# Tools that stop the agent until the user answers.
+_USER_BLOCKING_TOOLS = {"vscode_askQuestions"}
 
 
 def is_subagent_tool_id(tool_id: str) -> bool:
@@ -122,6 +124,7 @@ def tool_info(tool_id: str, arguments: dict[str, object]) -> ToolInfo:
         line_range=line_range,
         command=str(command) if command and category is ToolCategory.SHELL else None,
         writes_file=tool_id in _WHOLE_FILE_WRITERS,
+        blocks_on_user=tool_id in _USER_BLOCKING_TOOLS,
         arguments=arguments,
         paths=paths,
     )
