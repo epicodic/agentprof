@@ -19,6 +19,7 @@ It is private tooling that is linked in locally; if it is missing, ignore this s
 
 agentprof is a local web app that analyses AI coding agent sessions: call trees, timings, tokens, cost and waste.
 Read `docs/architecture.md` before changing or extending the code: it covers the repository layout, the components, the data flow and recipes for common extensions.
+Read `docs/session-view.md` before changing the browser UI: it describes the session list, the session view, its drawers and the stable test ids.
 
 ---
 
