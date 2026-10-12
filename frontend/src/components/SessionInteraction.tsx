@@ -22,7 +22,7 @@ export interface SessionInteraction {
   copyLink: (ref: EntityRef) => void;
   selectEntity: (ref: EntityRef) => void;
   markLocal: (viewKey: string, key: string) => void;
-  openEntity: (ref: EntityRef, expandCall?: boolean) => void;
+  openEntity: (ref: EntityRef, expandCall?: boolean, destinationTab?: DetailTab) => void;
   openNode: (nodeId: string) => void;
   changeTab: (tab: DetailTab) => void;
   closeDetails: () => void;

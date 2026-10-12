@@ -3,12 +3,15 @@
 """Join a parsed Copilot session with its transcript and debug log into a neutral node tree."""
 
 from collections import Counter
+from dataclasses import replace
+from typing import Any
 
 from agentprof.adapters.copilot_vscode.debuglog import DebugLlmCall, DebugLog
 from agentprof.adapters.copilot_vscode.session import RawRequest, RawSession, RawToolCall
-from agentprof.adapters.copilot_vscode.tools import tool_info
+from agentprof.adapters.copilot_vscode.tools import is_subagent_tool_id, tool_info
 from agentprof.adapters.copilot_vscode.transcript import Transcript
 from agentprof.adapters.execution import tool_execution_events
+from agentprof.adapters.timestamps import parse_iso_ms
 from agentprof.adapters.turns import split_by_turn
 from agentprof.model import (
     CostMetric,
@@ -20,7 +23,11 @@ from agentprof.model import (
     NodeKind,
     Provenance,
     Tokens,
+    TranscriptBlock,
+    TranscriptCoverage,
+    TranscriptEntry,
     iter_nodes,
+    transcript_entry_id,
 )
 
 _CREDITS = "credits"
@@ -284,6 +291,7 @@ def build_root(
         for request, calls in zip(raw.requests, groups, strict=True)
     ]
     root = Node(node_id="session", kind=NodeKind.SESSION, topic=raw.title or "session", children=turns)
+    _populate_transcript(root, raw, transcript, debug_log, stream_id)
     if transcript is not None:
         root.execution_events.extend(
             ExecutionEvent(
@@ -298,6 +306,675 @@ def build_root(
         _append_unrepresented_tool_events(root, transcript, stream_id)
         root.execution_events.sort(key=lambda event: (event.source_order is None, event.source_order or 0))
     return root
+
+
+def _record_text_blocks(value: object, native_type: str | None = None) -> list[TranscriptBlock]:
+    if isinstance(value, str):
+        return [TranscriptBlock(kind="message", native_type=native_type, text=value)]
+    if isinstance(value, list):
+        blocks: list[TranscriptBlock] = []
+        for part in value:
+            if not isinstance(part, dict):
+                blocks.append(TranscriptBlock(kind="other", data=part, availability="unsupported"))
+                continue
+            part_value = part.get("type") or part.get("kind")
+            part_type = part_value if isinstance(part_value, str) else None
+            text = part.get("text")
+            if part_type in ("text", "markdown", "markdownContent") and isinstance(text, str):
+                blocks.append(TranscriptBlock(kind="message", native_type=part_type, text=text))
+            elif part_type in ("text", "markdown", "markdownContent"):
+                blocks.append(
+                    TranscriptBlock(kind="message", native_type=part_type, data=part, availability="unavailable")
+                )
+            elif part_type in ("reasoning", "reasoning_summary", "reasoningSummary", "encrypted_reasoning"):
+                encrypted_keys = {"encryptedContent", "encrypted_content", "ciphertext"}
+                encrypted = (
+                    part_type == "encrypted_reasoning"
+                    or part.get("encrypted") is True
+                    or any(key in part for key in encrypted_keys)
+                )
+                blocks.append(
+                    TranscriptBlock(
+                        kind="reasoning",
+                        native_type=part_type,
+                        text=None if encrypted else text if isinstance(text, str) else None,
+                        data=(
+                            {key: item for key, item in part.items() if key not in encrypted_keys | {"text", "content"}}
+                            if encrypted
+                            else part
+                            if not isinstance(text, str)
+                            else None
+                        ),
+                        availability=(
+                            "encrypted" if encrypted else "recorded" if isinstance(text, str) else "unavailable"
+                        ),
+                    )
+                )
+            else:
+                blocks.append(
+                    TranscriptBlock(
+                        kind="other",
+                        native_type=part_type,
+                        text=text if isinstance(text, str) else None,
+                        data=part,
+                        availability="unsupported",
+                    )
+                )
+        return blocks
+    return [TranscriptBlock(kind="other", native_type=native_type, data=value, availability="unsupported")]
+
+
+def _source_owner_id(event: dict[str, object], root_sid: str | None) -> tuple[str | None, bool]:
+    data = event.get("data")
+    if not isinstance(data, dict):
+        return None, False
+    for key in ("ownerId", "agentId", "agentSessionId", "owner", "agent"):
+        value = data.get(key)
+        if isinstance(value, str):
+            return (None if value == root_sid else value), True
+        if isinstance(value, dict):
+            native_id = value.get("id") or value.get("sessionId")
+            if isinstance(native_id, str):
+                return (None if native_id == root_sid else native_id), True
+    return None, False
+
+
+def _linked_transcript_event_id(
+    event_type: object,
+    native_event_id: str | None,
+    tool_call_id: object,
+    event_id_counts: Counter[str],
+    tool_start_counts: Counter[str],
+    tool_complete_counts: Counter[str],
+    owner_id: str | None,
+    execution_event_ids: set[str],
+) -> str | None:
+    if event_type == "user.message" and owner_id is None and native_event_id and event_id_counts[native_event_id] == 1:
+        candidate = f"user-input:{native_event_id}"
+    elif (
+        event_type == "tool.execution_start" and isinstance(tool_call_id, str) and tool_start_counts[tool_call_id] == 1
+    ):
+        candidate = f"tool-start:{tool_call_id}"
+    elif (
+        event_type == "tool.execution_complete"
+        and isinstance(tool_call_id, str)
+        and tool_complete_counts[tool_call_id] == 1
+    ):
+        candidate = f"tool-result:{tool_call_id}"
+    else:
+        return None
+    return candidate if candidate in execution_event_ids else None
+
+
+def _populate_transcript(
+    root: Node,
+    raw: RawSession,
+    transcript: Transcript | None,
+    debug_log: DebugLog | None,
+    source_stream_id: str | None,
+) -> None:
+    nodes = list(iter_nodes(root))
+    unique_node_ids: dict[str, Node | None] = {}
+    for node in nodes:
+        unique_node_ids[node.node_id] = node if node.node_id not in unique_node_ids else None
+    agents = {
+        node.agent_uuid: node
+        for node in nodes
+        if node.agent_uuid is not None and unique_node_ids.get(node.agent_uuid) is node
+    }
+    parent_nodes: dict[str, Node | None] = {}
+    node_index: dict[str, Node | None] = {}
+    for node in nodes:
+        node_index[node.node_id] = node if node.node_id not in node_index else None
+        for child in node.children:
+            parent_nodes[child.node_id] = node if child.node_id not in parent_nodes else None
+    invocation_parent_nodes: dict[str, Node] = {}
+    invocation_owners: dict[str, str | None] = {}
+    for candidate in nodes:
+        parent = parent_nodes.get(candidate.node_id)
+        if candidate.tool is not None and node_index.get(candidate.node_id) is candidate and parent is not None:
+            invocation_parent_nodes[candidate.node_id] = parent
+            invocation_owners[candidate.node_id] = parent.agent_uuid
+    source_present = transcript is not None or raw.source_present or debug_log is not None
+    categories = []
+    if transcript is not None:
+        categories.append("transcript")
+    if raw.source_present:
+        categories.append("export")
+    if debug_log is not None:
+        categories.append("debug-log")
+    reasons = [] if transcript is not None else ["transcript_file_missing"]
+    coverage = TranscriptCoverage(source_present=source_present, categories=categories, reasons=reasons)
+    for node in nodes:
+        node.transcript_coverage = TranscriptCoverage(
+            source_present=coverage.source_present,
+            categories=list(coverage.categories),
+            reasons=list(coverage.reasons),
+        )
+
+    _populate_export_entries(root, raw, source_stream_id)
+
+    stream = (
+        f"copilot-transcript:{transcript.session_id or source_stream_id}:{transcript.source_filename}"
+        if transcript is not None
+        else f"copilot-export:{raw.session_id or source_stream_id}"
+    )
+    if transcript is not None:
+        message_id_counts: Counter[str] = Counter()
+        event_id_counts: Counter[str] = Counter()
+        tool_start_counts: Counter[str] = Counter()
+        tool_complete_counts: Counter[str] = Counter()
+        for native_record in transcript.native_records:
+            native_data = native_record.event.get("data")
+            if isinstance(native_data, dict):
+                message_id = native_data.get("messageId")
+                if isinstance(message_id, str):
+                    message_id_counts[message_id] += 1
+                call_id = native_data.get("toolCallId")
+                if isinstance(call_id, str) and native_record.event.get("type") == "tool.execution_start":
+                    tool_start_counts[call_id] += 1
+                if isinstance(call_id, str) and native_record.event.get("type") == "tool.execution_complete":
+                    tool_complete_counts[call_id] += 1
+            native_event_id = native_record.event.get("id")
+            if isinstance(native_event_id, str):
+                event_id_counts[native_event_id] += 1
+        execution_event_ids = {
+            event.event_id for node in nodes for event in node.execution_events if event.event_id is not None
+        }
+        owner_by_event: dict[str, str | None] = {}
+        start_owner: dict[str, str | None] = {}
+        start_parent_node: dict[str, Node] = {}
+        ambiguous_start_ids: set[str] = set()
+        active: list[str | None] = [None]
+        parallel_active: set[str] = set()
+        for record in transcript.native_records:
+            event = record.event
+            data_value = event.get("data")
+            data: dict[str, Any] = data_value if isinstance(data_value, dict) else {}
+            event_type = event.get("type")
+            explicit_owner, has_explicit_owner = _source_owner_id(event, transcript.session_id)
+            tool_call_id = data.get("toolCallId") if isinstance(data, dict) else None
+            ambiguous_invocation = (
+                event_type in ("tool.execution_start", "tool.execution_complete")
+                and isinstance(tool_call_id, str)
+                and (tool_start_counts[tool_call_id] > 1 or node_index.get(tool_call_id, root) is None)
+            )
+            if ambiguous_invocation:
+                explicit_owner, has_explicit_owner = None, True
+            parent_id = event.get("parentId")
+            inferred = active[-1]
+            evidence = "bracket" if inferred is not None else "root"
+            ambiguous = False
+            parent_known = (
+                isinstance(parent_id, str) and event_id_counts[parent_id] == 1 and parent_id in owner_by_event
+            )
+            if isinstance(parent_id, str):
+                if parent_known:
+                    inferred = owner_by_event[parent_id]
+                    evidence = "recorded_parent"
+                elif not has_explicit_owner:
+                    inferred, evidence, ambiguous = None, "ambiguous", True
+            owner_key = explicit_owner if has_explicit_owner else inferred
+            if (
+                event_type == "tool.execution_start"
+                and isinstance(tool_call_id, str)
+                and tool_call_id in invocation_owners
+                and not ambiguous_invocation
+            ):
+                invocation_owner = invocation_owners[tool_call_id]
+                if (has_explicit_owner and explicit_owner != invocation_owner) or (
+                    parent_known and inferred != invocation_owner
+                ):
+                    owner_key, evidence, ambiguous = None, "ambiguous_conflicting_owner", True
+                elif not has_explicit_owner and not parent_known:
+                    owner_key, evidence = invocation_owner, "explicit_invocation_parent"
+            if has_explicit_owner and not ambiguous:
+                evidence = "explicit_owner"
+            if ambiguous_invocation:
+                owner_key, evidence, ambiguous = None, "ambiguous_invocation", True
+            if event_type == "tool.execution_complete" and isinstance(tool_call_id, str):
+                if tool_call_id in ambiguous_start_ids:
+                    owner_key, evidence, ambiguous = None, "ambiguous_invocation", True
+                elif tool_call_id in start_owner and not ambiguous_invocation:
+                    invocation_owner = start_owner[tool_call_id]
+                    if (has_explicit_owner or parent_known) and owner_key != invocation_owner:
+                        owner_key, evidence, ambiguous = None, "ambiguous_conflicting_owner", True
+                    elif not has_explicit_owner and not parent_known:
+                        owner_key, evidence = invocation_owner, "invocation_owner"
+            if active[-1] in parallel_active and not has_explicit_owner and not parent_known:
+                owner_key, evidence, ambiguous = None, "ambiguous_parallel", True
+            if owner_key is not None and owner_key not in agents:
+                owner_key, evidence, ambiguous = None, "ambiguous", True
+            node = agents.get(owner_key, root)
+            if (
+                event_type == "tool.execution_complete"
+                and isinstance(tool_call_id, str)
+                and not ambiguous
+                and not ambiguous_invocation
+                and (has_explicit_owner or parent_known or tool_call_id in start_owner)
+            ):
+                node = start_parent_node.get(tool_call_id, node)
+            if (
+                event_type == "tool.execution_start"
+                and isinstance(tool_call_id, str)
+                and not ambiguous
+                and not ambiguous_invocation
+            ):
+                node = invocation_parent_nodes.get(tool_call_id, node)
+            event_id = event.get("id") if isinstance(event.get("id"), str) else None
+            source_request_id = data.get("messageId") if isinstance(data, dict) else None
+            if isinstance(source_request_id, str) is False:
+                source_request_id = None
+            if source_request_id is not None and message_id_counts[source_request_id] != 1:
+                source_request_id = None
+            native_id = source_request_id or event_id
+            original_message_id = data.get("messageId") if isinstance(data, dict) else None
+            if isinstance(original_message_id, str):
+                native_id = original_message_id
+            entry_kind = "other"
+            blocks: list[TranscriptBlock] = []
+            invocation_id: str | None = None
+            delegation_child_id: str | None = None
+            if event_type == "user.message":
+                entry_kind = "user_message"
+                blocks = (
+                    _record_text_blocks(data.get("content"))
+                    if "content" in data
+                    else [TranscriptBlock(kind="message", availability="unavailable")]
+                )
+                if owner_key is None:
+                    node = root
+                    evidence = "root"
+            elif event_type == "assistant.message":
+                entry_kind = "assistant_message"
+                content = data.get("content")
+                blocks = (
+                    _record_text_blocks(content)
+                    if "content" in data
+                    else [TranscriptBlock(kind="message", availability="unavailable")]
+                )
+            elif event_type == "tool.execution_start":
+                entry_kind = "tool_request"
+                tool_id = data.get("toolCallId")
+                invocation_id = tool_id if isinstance(tool_id, str) else None
+                blocks = [
+                    TranscriptBlock(kind="tool_request", native_type="arguments", data=data["arguments"])
+                    if "arguments" in data
+                    else TranscriptBlock(kind="tool_request", native_type="arguments", availability="unavailable")
+                ]
+                tool_name = data.get("toolName")
+                if isinstance(tool_name, str) and is_subagent_tool_id(tool_name) and isinstance(tool_id, str):
+                    delegation_child_id = tool_id
+            elif event_type == "tool.execution_complete":
+                entry_kind = "tool_result"
+                tool_id = data.get("toolCallId")
+                invocation_id = tool_id if isinstance(tool_id, str) else None
+                output_key = next((key for key in ("output", "result", "content") if key in data), None)
+                if output_key is None:
+                    blocks = [TranscriptBlock(kind="tool_result", availability="unavailable")]
+                else:
+                    value = data[output_key]
+                    blocks = [
+                        TranscriptBlock(
+                            kind="tool_result",
+                            native_type=output_key,
+                            text=value if isinstance(value, str) else None,
+                            data=None if isinstance(value, str) else value,
+                            availability="unavailable" if value is None else "recorded",
+                        )
+                    ]
+                if isinstance(tool_id, str):
+                    parallel_active.discard(tool_id)
+                    if tool_id in active[1:]:
+                        active.remove(tool_id)
+                    parallel_active.intersection_update(active[1:])
+                    if len(parallel_active) < 2:
+                        parallel_active.clear()
+            elif isinstance(event_type, str) and "compact" in event_type.lower():
+                entry_kind = "compaction"
+                blocks = [TranscriptBlock(kind="compaction", native_type=event_type, data=data)]
+            elif event_type in ("session.start", "assistant.turn_start", "assistant.turn_end"):
+                entry_kind = "message"
+                blocks = [TranscriptBlock(kind="other", native_type=str(event_type), data=data)]
+            else:
+                blocks = [TranscriptBlock(kind="other", native_type=str(event_type), data=data)]
+            if event_id is not None and event_id_counts[event_id] == 1 and not ambiguous:
+                owner_by_event[event_id] = (
+                    delegation_child_id
+                    if delegation_child_id is not None and delegation_child_id in agents
+                    else owner_key
+                )
+            try:
+                timestamp = (
+                    Metric.exact(parse_iso_ms(event["timestamp"]))
+                    if isinstance(event.get("timestamp"), str)
+                    else Metric.not_available()
+                )
+            except (TypeError, ValueError):
+                timestamp = Metric.not_available()
+            entry = TranscriptEntry(
+                entry_id=transcript_entry_id(stream, record.source_position, native_id=native_id),
+                owner_id=node.node_id,
+                source_stream_id=stream,
+                logical_stream_id=owner_key or source_stream_id,
+                source_position=record.source_position,
+                native_id=native_id,
+                native_ordinal=record.native_ordinal,
+                timestamp=timestamp,
+                kind=entry_kind,
+                sender=(
+                    data.get("sender")
+                    if event_type in {"user.message", "assistant.message"}
+                    and isinstance(data.get("sender"), str)
+                    and data.get("sender")
+                    else data.get("author")
+                    if event_type in {"user.message", "assistant.message"}
+                    and isinstance(data.get("author"), str)
+                    and data.get("author")
+                    else None
+                ),
+                recipient=(
+                    data.get("recipient")
+                    if event_type in {"user.message", "assistant.message"}
+                    and isinstance(data.get("recipient"), str)
+                    and data.get("recipient")
+                    else None
+                ),
+                blocks=blocks,
+                source_request_id=source_request_id,
+                invocation_id=invocation_id,
+                event_id=_linked_transcript_event_id(
+                    event_type,
+                    event_id,
+                    tool_call_id,
+                    event_id_counts,
+                    tool_start_counts,
+                    tool_complete_counts,
+                    owner_key,
+                    execution_event_ids,
+                ),
+                subject_node_id=(
+                    str(data["toolCallId"])
+                    if isinstance(data.get("toolCallId"), str)
+                    and unique_node_ids.get(str(data["toolCallId"])) is not None
+                    and not ambiguous_invocation
+                    else None
+                ),
+                ownership_evidence=evidence if ambiguous else evidence,
+            )
+            node.transcript_entries.append(entry)
+            if event_type == "tool.execution_start" and isinstance(tool_call_id, str):
+                if ambiguous or ambiguous_invocation:
+                    ambiguous_start_ids.add(tool_call_id)
+                else:
+                    start_owner[tool_call_id] = owner_key
+                    start_parent_node[tool_call_id] = node
+            if (
+                delegation_child_id is not None
+                and delegation_child_id in agents
+                and not ambiguous
+                and not ambiguous_invocation
+            ):
+                if active[-1] != owner_key and active[-1] is not None:
+                    parallel_active.update((active[-1], delegation_child_id))
+                active.append(delegation_child_id)
+            if event_type == "assistant.message" and isinstance(data.get("toolRequests"), list):
+                for index, request in enumerate(data["toolRequests"], 1):
+                    if not isinstance(request, dict):
+                        continue
+                    tool_id = request.get("toolCallId")
+                    node.transcript_entries.append(
+                        TranscriptEntry(
+                            entry_id=transcript_entry_id(
+                                stream, record.source_position, index, str(tool_id) if tool_id else None
+                            ),
+                            owner_id=node.node_id,
+                            source_stream_id=stream,
+                            logical_stream_id=owner_key or source_stream_id,
+                            source_position=record.source_position,
+                            block_position=index,
+                            native_id=str(tool_id) if tool_id else native_id,
+                            native_ordinal=record.native_ordinal,
+                            timestamp=entry.timestamp,
+                            kind="delegation" if is_subagent_tool_id(request.get("name")) else "tool_request",
+                            blocks=[
+                                TranscriptBlock(
+                                    kind="tool_request", native_type=request.get("name"), data=request.get("arguments")
+                                )
+                            ],
+                            source_request_id=source_request_id if isinstance(source_request_id, str) else None,
+                            invocation_id=str(tool_id) if isinstance(tool_id, str) else None,
+                            subject_node_id=(
+                                str(tool_id)
+                                if isinstance(tool_id, str) and unique_node_ids.get(str(tool_id)) is not None
+                                else None
+                            ),
+                            ownership_evidence=entry.ownership_evidence,
+                        )
+                    )
+
+    if debug_log is not None:
+        call_positions: dict[tuple[str | None, str, str], list[tuple[int, int]]] = {}
+        for owner, calls in debug_log.calls.items():
+            for index, call in enumerate(calls):
+                if call.source_request_id is not None and call.source_filename is not None:
+                    call_positions.setdefault((owner, call.source_filename, call.source_request_id), []).append(
+                        (
+                            call.source_position if call.source_position is not None else index,
+                            call.native_ordinal if call.native_ordinal is not None else index,
+                        )
+                    )
+        for record in debug_log.response_records:
+            request_id = record.request_id
+            response = record.message
+            filename = response.source_filename or "unknown.jsonl"
+            positions = call_positions.get((record.owner_id, filename, request_id), [])
+            physical_position = response.source_position if response.source_position is not None else 0
+            node = agents.get(record.owner_id, root)
+            stream = f"copilot-debug:{source_stream_id}:{filename}"
+            native_id = response.native_id or f"agent-msg-{request_id}"
+            node.transcript_entries.append(
+                TranscriptEntry(
+                    entry_id=transcript_entry_id(stream, physical_position, native_id=native_id),
+                    owner_id=node.node_id,
+                    source_stream_id=stream,
+                    logical_stream_id=record.owner_id or source_stream_id,
+                    source_position=physical_position,
+                    native_id=native_id,
+                    native_ordinal=response.native_ordinal,
+                    timestamp=(
+                        Metric.exact(response.timestamp_ms)
+                        if response.timestamp_ms is not None
+                        else Metric.not_available()
+                    ),
+                    kind="assistant_message",
+                    role=response.role,
+                    blocks=[
+                        replace(block, availability=response.availability)
+                        if block.availability == "recorded"
+                        else block
+                        for block in response.blocks
+                    ],
+                    source_request_id=request_id if len(positions) == 1 else None,
+                    ownership_evidence="explicit_span",
+                )
+            )
+        for record in debug_log.history_records:
+            positions = call_positions.get((record.owner_id, record.source_filename, record.request_id), [])
+            node = agents.get(record.owner_id, root)
+            stream = f"copilot-debug:{source_stream_id}:{record.source_filename}"
+            native_snapshot = [
+                {
+                    "role": message.role,
+                    "availability": message.availability,
+                    "blocks": [
+                        {
+                            "kind": block.kind,
+                            "native_type": block.native_type,
+                            "text": block.text,
+                            "data": block.data,
+                            "availability": block.availability,
+                        }
+                        for block in message.blocks
+                    ],
+                }
+                for message in record.messages
+            ]
+            node.transcript_entries.append(
+                TranscriptEntry(
+                    entry_id=transcript_entry_id(stream, record.source_position, native_id=record.request_id),
+                    owner_id=node.node_id,
+                    source_stream_id=stream,
+                    logical_stream_id=record.owner_id or source_stream_id,
+                    source_position=record.source_position,
+                    native_id=record.request_id,
+                    native_ordinal=record.native_ordinal,
+                    timestamp=(
+                        Metric.exact(record.timestamp_ms) if record.timestamp_ms is not None else Metric.not_available()
+                    ),
+                    kind="other",
+                    channel="request_history_snapshot",
+                    blocks=[TranscriptBlock(kind="other", native_type="inputMessages", data=native_snapshot)],
+                    source_request_id=record.request_id if len(positions) == 1 else None,
+                    ownership_evidence="explicit_span_snapshot",
+                )
+            )
+
+
+def _populate_export_entries(root: Node, raw: RawSession, source_stream_id: str | None) -> None:
+    stream = f"copilot-export:{raw.session_id or source_stream_id}"
+    turns = {node.node_id: node for node in root.children}
+    node_ids: dict[str, Node | None] = {}
+    parent_by_id: dict[str, Node] = {}
+
+    def index(node: Node) -> None:
+        node_ids[node.node_id] = node if node.node_id not in node_ids else None
+        for child in node.children:
+            parent_by_id[child.node_id] = node
+            index(child)
+
+    index(root)
+    for request_index, request in enumerate(raw.requests):
+        turn = turns.get(request.request_id)
+        if turn is None:
+            continue
+        prompt_blocks = (
+            _record_text_blocks(request.prompt_parts)
+            if request.prompt_parts
+            else [TranscriptBlock(kind="message", text=request.text)]
+            if request.prompt_available
+            else [TranscriptBlock(kind="message", availability="unavailable")]
+        )
+        turn.transcript_entries.append(
+            TranscriptEntry(
+                entry_id=transcript_entry_id(stream, request_index, 0, request.request_id),
+                owner_id=turn.node_id,
+                source_stream_id=stream,
+                logical_stream_id=source_stream_id,
+                source_position=request_index,
+                block_position=0,
+                native_id=request.request_id,
+                native_ordinal=request_index,
+                timestamp=Metric.exact(request.timestamp_ms),
+                kind="user_message",
+                role="user",
+                blocks=prompt_blocks,
+                source_request_id=request.request_id,
+                ownership_evidence="export_request",
+            )
+        )
+        calls = {call.tool_call_id: call for call in request.tool_calls}
+        for part_index, part in enumerate(request.response_parts, 1):
+            part_kind = part.get("kind")
+            tool_id = part.get("toolCallId") if isinstance(part.get("toolCallId"), str) else None
+            call = calls.get(tool_id) if tool_id is not None else None
+            owner = parent_by_id.get(tool_id, turn) if tool_id is not None else turn
+            native_id = str(tool_id) if tool_id else part.get("id") if isinstance(part.get("id"), str) else None
+            kind = "tool_request" if part_kind == "toolInvocationSerialized" else "assistant_message"
+            if isinstance(part_kind, str) and "reason" in part_kind.lower():
+                kind = "reasoning"
+            if kind == "tool_request":
+                block = TranscriptBlock(kind="tool_request", native_type=str(part_kind), data=part)
+            elif kind == "reasoning":
+                encrypted_keys = {"encryptedContent", "encrypted_content", "ciphertext"}
+                encrypted = part.get("encrypted") is True or any(key in part for key in encrypted_keys)
+                value = next((part[key] for key in ("text", "content") if isinstance(part.get(key), str)), None)
+                block = TranscriptBlock(
+                    kind="reasoning",
+                    native_type=str(part_kind),
+                    text=None if encrypted else value,
+                    data=(
+                        {key: item for key, item in part.items() if key not in encrypted_keys | {"text", "content"}}
+                        if encrypted
+                        else None
+                        if isinstance(value, str)
+                        else part
+                    ),
+                    availability=(
+                        "encrypted" if encrypted else "recorded" if isinstance(value, str) else "unavailable"
+                    ),
+                )
+            else:
+                value = next((part[key] for key in ("text", "value", "content", "markdown") if key in part), None)
+                text_part = part_kind in ("text", "markdown", "markdownContent")
+                block = TranscriptBlock(
+                    kind="message" if isinstance(value, str) or text_part else "other",
+                    native_type=str(part_kind),
+                    text=value if isinstance(value, str) else None,
+                    data=None if isinstance(value, str) else part,
+                    availability=(
+                        "recorded" if isinstance(value, str) else "unavailable" if text_part else "unsupported"
+                    ),
+                )
+            part_position = part_index * 3
+            owner.transcript_entries.append(
+                TranscriptEntry(
+                    entry_id=transcript_entry_id(stream, request_index, part_position, native_id),
+                    owner_id=owner.node_id,
+                    source_stream_id=stream,
+                    logical_stream_id=owner.agent_uuid or source_stream_id,
+                    source_position=request_index,
+                    block_position=part_position,
+                    native_id=native_id,
+                    native_ordinal=part_index,
+                    timestamp=Metric.exact(request.timestamp_ms),
+                    kind="delegation" if call is not None and call.is_agent else kind,
+                    role="assistant",
+                    blocks=[block],
+                    source_request_id=request.request_id,
+                    invocation_id=tool_id,
+                    subject_node_id=tool_id if node_ids.get(tool_id or "") is not None else None,
+                    ownership_evidence="explicit_invocation_parent" if tool_id is not None else "export_request",
+                )
+            )
+            if call is None or not call.is_agent:
+                continue
+            child = node_ids.get(call.tool_call_id)
+            if child is None:
+                continue
+            for offset, (label, content) in enumerate(
+                (("subagent_prompt", call.subagent_prompt), ("subagent_result", call.subagent_result)), 1
+            ):
+                if not isinstance(content, str):
+                    continue
+                child.transcript_entries.append(
+                    TranscriptEntry(
+                        entry_id=transcript_entry_id(stream, request_index, part_position + offset, call.tool_call_id),
+                        owner_id=child.node_id,
+                        source_stream_id=stream,
+                        logical_stream_id=child.agent_uuid,
+                        source_position=request_index,
+                        block_position=part_position + offset,
+                        native_id=call.tool_call_id,
+                        native_ordinal=part_index,
+                        timestamp=Metric.exact(request.timestamp_ms),
+                        kind="user_message" if label == "subagent_prompt" else "assistant_message",
+                        role="user" if label == "subagent_prompt" else "assistant",
+                        blocks=[TranscriptBlock(kind="message", native_type=label, text=content)],
+                        invocation_id=call.tool_call_id,
+                        ownership_evidence="export_child_scope",
+                    )
+                )
 
 
 def _append_unrepresented_tool_events(root: Node, transcript: Transcript, source_stream_id: str | None) -> None:

@@ -53,6 +53,9 @@ class RawRequest:
     response_timestamp_ms: int | None = None
     round_timestamps_ms: list[int] = field(default_factory=list)
     tool_calls: list[RawToolCall] = field(default_factory=list)
+    response_parts: list[dict[str, Any]] = field(default_factory=list)
+    prompt_available: bool = False
+    prompt_parts: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -64,6 +67,7 @@ class RawSession:
     creation_ms: int | None
     requests: list[RawRequest]
     malformed_lines: int = 0
+    source_present: bool = True
 
 
 def _markdown_link_replacement(match: re.Match[str]) -> str:
@@ -150,6 +154,8 @@ def _parse_request(raw: dict[str, Any]) -> RawRequest:
         if is_subagent_tool_id(tool_call.tool_id) or tool_call.tool_call_id in parent_ids:
             tool_call.is_agent = True
 
+    message = raw.get("message")
+    prompt_available = isinstance(message, dict) and ("text" in message or isinstance(message.get("parts"), list))
     return RawRequest(
         request_id=raw["requestId"],
         text=raw.get("message", {}).get("text", ""),
@@ -164,6 +170,11 @@ def _parse_request(raw: dict[str, Any]) -> RawRequest:
         response_timestamp_ms=raw.get("responseTimestamp"),
         round_timestamps_ms=[r["timestamp"] for r in rounds if "timestamp" in r],
         tool_calls=tool_calls,
+        response_parts=[part.copy() for part in raw.get("response", []) if isinstance(part, dict)],
+        prompt_available=prompt_available,
+        prompt_parts=[part.copy() for part in message.get("parts", []) if isinstance(part, dict)]
+        if isinstance(message, dict)
+        else [],
     )
 
 

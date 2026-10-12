@@ -30,6 +30,7 @@ import {
   usePanelReadingPosition,
   useSessionInteraction,
 } from "./SessionInteraction";
+import { TranscriptSection } from "./TranscriptSection";
 import { WorkflowBreadcrumbs } from "./WorkflowBreadcrumbs";
 import { WorkflowStatus } from "./WorkflowStatus";
 
@@ -371,6 +372,13 @@ export function NodeDrawer({
                 {detail.isPending && <Loader size="sm" data-testid="node-detail-loading" />}
                 {detail.isError && <Alert color="red">{detail.error.message}</Alert>}
                 {detail.data !== undefined && <DetailTexts detail={detail.data} />}
+                <TranscriptSection
+                  key={node.node_id}
+                  sessionId={sessionId}
+                  node={node}
+                  active={tab === "content"}
+                  panelRef={contentPosition.ref}
+                />
               </Stack>
             </Tabs.Panel>
           </Tabs>

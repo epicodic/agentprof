@@ -50,3 +50,16 @@ describe("inspection actions", () => {
     expect(params.toString()).toContain("tab=workflow");
   });
 });
+
+describe("transcript detail destinations", () => {
+  it("opens transcript URLs in Content and supports an explicit Content tab for calls", () => {
+    const params = new URLSearchParams("filter=slow");
+    const transcript: EntityRef = { kind: "transcript", sessionId: "s", ownerId: "owner", entryId: "entry" };
+    expect(detailLink("/sessions/s", params, transcript)).toBe(
+      "/sessions/s?filter=slow&node=owner&tab=content&sel=transcript&owner=owner&entry=entry",
+    );
+    const call: EntityRef = { kind: "call", sessionId: "s", ownerId: "owner", callKey: "id:c" };
+    expect(detailLink("/sessions/s", params, call, "content")).toContain("tab=content");
+    expect(detailLink("/sessions/s", params, call)).toContain("tab=workflow");
+  });
+});

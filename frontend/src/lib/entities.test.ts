@@ -395,3 +395,17 @@ describe("agentNode", () => {
     expect(agentNode(root, 99)).toBeNull();
   });
 });
+
+describe("transcript identity", () => {
+  it("resolves only the owner node and keeps transcript marks off the node tree", () => {
+    const owner = makeNode({ node_id: "owner", kind: "agent" });
+    const root = makeNode({ node_id: "root", kind: "session", children: [owner] });
+    const ref: EntityRef = { kind: "transcript", sessionId: "s", ownerId: "owner", entryId: "entry /雪" };
+    expect(resolveEntity(root, "s", ref)).toEqual({ node: owner, call: null, event: null, index: null });
+    expect(resolveEntity(root, "other", ref)).toBeNull();
+    expect(resolveEntity(root, "s", { ...ref, ownerId: "missing" })).toBeNull();
+    expect(sameEntity(ref, { ...ref, entryId: "other" })).toBe(false);
+    expect(relationToNode(root, "s", ref, "owner")).toBe("none");
+    expect(relationsToNodes(root, ref, resolveEntity(root, "s", ref))).toEqual(new Map());
+  });
+});

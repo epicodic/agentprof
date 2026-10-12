@@ -25,7 +25,9 @@ def _merge_main_rollouts(rollouts: list[Rollout]) -> Rollout:
     main = rollouts[0]
     for continuation in rollouts[1:]:
         main.turns.extend(continuation.turns)
+        main.native_records.extend(continuation.native_records)
         main.malformed_lines += continuation.malformed_lines
+        main.source_present = main.source_present or continuation.source_present
         if continuation.last_message_ms is not None:
             main.last_message_ms = max(
                 main.last_message_ms or continuation.last_message_ms, continuation.last_message_ms
@@ -83,8 +85,10 @@ class CodexAdapter:
             files = SessionFiles(metadata.session_id, ref.path, [ref.path], [metadata])
         roots = [rollout.path for rollout in files.rollouts if rollout.parent_thread_id is None]
         main_paths = roots or [ref.path]
-        main = _merge_main_rollouts([load_rollout(path) for path in main_paths])
-        subagents = [load_rollout(rollout.path) for rollout in files.rollouts if rollout.path not in main_paths]
+        main = _merge_main_rollouts([load_rollout(path, self._root) for path in main_paths])
+        subagents = [
+            load_rollout(rollout.path, self._root) for rollout in files.rollouts if rollout.path not in main_paths
+        ]
         return files, main, subagents
 
     def discover(self) -> Iterator[SessionRef]:

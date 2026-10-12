@@ -4,7 +4,7 @@
 import type { MouseEvent, ReactNode } from "react";
 import { type EntityRef, resolveEntity } from "../lib/entities";
 import { truncateTitle } from "../lib/format";
-import { detailTab, writeInspection } from "../lib/inspectionLocation";
+import { type DetailTab, detailTab, writeInspection } from "../lib/inspectionLocation";
 import classes from "./DetailLink.module.css";
 import { useSessionInteraction } from "./SessionInteraction";
 
@@ -12,12 +12,16 @@ import { useSessionInteraction } from "./SessionInteraction";
 export function DetailLink({
   label,
   entityRef = null,
+  destinationTab,
   onOpen,
+  onBeforeOpen,
   children,
 }: {
   label: string;
   entityRef?: EntityRef | null;
+  destinationTab?: DetailTab;
   onOpen?: (event: MouseEvent<HTMLAnchorElement>) => void;
+  onBeforeOpen?: () => void;
   children: ReactNode;
 }) {
   const fullCaption = typeof children === "string" ? children : null;
@@ -33,7 +37,13 @@ export function DetailLink({
       ? null
       : writeInspection(new URLSearchParams(), {
           nodeId: entity.node.node_id,
-          tab: entityRef.kind === "node" ? detailTab(entity.node.kind, null) : "workflow",
+          tab:
+            destinationTab ??
+            (entityRef.kind === "node"
+              ? detailTab(entity.node.kind, null)
+              : entityRef.kind === "transcript"
+                ? "content"
+                : "workflow"),
           selection: entityRef,
           invalidSelection: false,
         });
@@ -49,11 +59,23 @@ export function DetailLink({
         event.stopPropagation();
         if (href !== "#" && (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey)) return;
         event.preventDefault();
-        if (onOpen) onOpen(event);
+        onBeforeOpen?.();
+        if (destinationTab !== undefined && entityRef !== null)
+          interaction?.openEntity(entityRef, true, destinationTab);
+        else if (onOpen) onOpen(event);
         else if (entityRef !== null) interaction?.openEntity(entityRef);
       }}
       onKeyDown={(event) => {
-        if (event.key === "Enter" || event.key === " ") event.stopPropagation();
+        if (event.key === "Enter") {
+          if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+          event.preventDefault();
+          onBeforeOpen?.();
+          if (destinationTab !== undefined && entityRef !== null)
+            interaction?.openEntity(entityRef, true, destinationTab);
+          else event.currentTarget.click();
+        } else if (event.key === " ") {
+          event.stopPropagation();
+        }
       }}
     >
       {clippedCaption}

@@ -18,7 +18,13 @@ import type { SessionOut } from "../api/types";
 import { agentNode, type EntityRef, resolveEntity } from "../lib/entities";
 import { totalTokens } from "../lib/format";
 import { detailLink } from "../lib/inspectionActions";
-import { type DetailTab, detailTab, parseInspection, writeInspection } from "../lib/inspectionLocation";
+import {
+  type DetailTab,
+  detailTab,
+  markEntityTransition,
+  parseInspection,
+  writeInspection,
+} from "../lib/inspectionLocation";
 import { preserveSafeLocalMark } from "../lib/localMarks";
 import { metricScale } from "../lib/metricColor";
 import { initialSplitPercent, splitPercentAfterDrag } from "../lib/splitPane";
@@ -406,6 +412,7 @@ export function SessionView({ session, fetchedAtMs }: { session: SessionOut; fet
 
   const clearDestinationSequence = useCallback(
     (ref: EntityRef, reason: "open" | "reveal", destinationTab: DetailTab | null, expandCall?: boolean) => {
+      if (destinationTab === "content") return;
       if (ref.kind !== "event" && (ref.kind !== "call" || expandCall !== false)) return;
       const owner = findNode(root, ref.ownerId);
       if (owner === null) return;
@@ -558,12 +565,12 @@ export function SessionView({ session, fetchedAtMs }: { session: SessionOut; fet
       pauseFollow();
       const entity = resolveEntity(root, session.id, ref);
       if (entity === null) return;
-      const next = { ...location, selection: ref, invalidSelection: false };
+      const transition = markEntityTransition(location, ref, selectedNode?.kind);
       setLocalMark(null);
-      setInspectionRequest(null);
-      navigateInspection(next, true);
+      setInspectionRequest(transition.inspectionRequest);
+      navigateInspection(transition.location, true);
     },
-    [pauseFollow, root, session.id, location, navigateInspection],
+    [pauseFollow, root, session.id, location, navigateInspection, selectedNode?.kind],
   );
 
   const markLocal = useCallback(
@@ -579,25 +586,29 @@ export function SessionView({ session, fetchedAtMs }: { session: SessionOut; fet
   );
 
   const openEntity = useCallback(
-    (ref: EntityRef, expandCall = true) => {
+    (ref: EntityRef, expandCall = true, destinationTab?: DetailTab) => {
       pauseFollow();
       const entity = resolveEntity(root, session.id, ref);
       if (entity === null) return;
+      const shouldExpandCall = destinationTab === "content" ? false : expandCall;
       setLocalMark(null);
       rememberCurrentTab();
       const next = {
         ...location,
         nodeId: entity.node.node_id,
         tab:
-          ref.kind === "call" || ref.kind === "event"
-            ? ("workflow" as const)
-            : rememberedTab(entity.node.node_id, entity.node.kind),
+          destinationTab ??
+          (ref.kind === "transcript"
+            ? ("content" as const)
+            : ref.kind === "call" || ref.kind === "event"
+              ? ("workflow" as const)
+              : rememberedTab(entity.node.node_id, entity.node.kind)),
         selection: ref,
         invalidSelection: false,
       };
       navigateInspection(next, false, {
         target: entity.node.node_id,
-        expandCall,
+        expandCall: shouldExpandCall,
         reason: "open",
         ref,
         tab: next.tab,

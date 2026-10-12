@@ -7,8 +7,10 @@ import { findNode } from "./tree";
 export type EntityRef =
   | { kind: "node"; sessionId: string; nodeId: string }
   | { kind: "call"; sessionId: string; ownerId: string; callKey: string }
-  | { kind: "event"; sessionId: string; ownerId: string; eventId: string };
+  | { kind: "event"; sessionId: string; ownerId: string; eventId: string }
+  | { kind: "transcript"; sessionId: string; ownerId: string; entryId: string };
 export type CallRef = Extract<EntityRef, { kind: "call" }>;
+export type TranscriptRef = Extract<EntityRef, { kind: "transcript" }>;
 
 export type SelectionRelation = "none" | "exact" | "associated";
 
@@ -116,7 +118,8 @@ export function sameEntity(a: EntityRef | null, b: EntityRef | null): boolean {
   if (a === null || b === null || a.kind !== b.kind || a.sessionId !== b.sessionId) return false;
   if (a.kind === "node" && b.kind === "node") return a.nodeId === b.nodeId;
   if (a.kind === "call" && b.kind === "call") return a.ownerId === b.ownerId && a.callKey === b.callKey;
-  return a.kind === "event" && b.kind === "event" && a.ownerId === b.ownerId && a.eventId === b.eventId;
+  if (a.kind === "event" && b.kind === "event") return a.ownerId === b.ownerId && a.eventId === b.eventId;
+  return a.kind === "transcript" && b.kind === "transcript" && a.ownerId === b.ownerId && a.entryId === b.entryId;
 }
 
 export function resolveEntity(root: NodeOut, sessionId: string, ref: EntityRef): ResolvedEntity | null {
@@ -144,6 +147,9 @@ export function resolveEntity(root: NodeOut, sessionId: string, ref: EntityRef):
     return candidate !== null && sameEntity(candidate, ref)
       ? { node, call: null, event: events[matchIndex], index: matchIndex }
       : null;
+  }
+  if (ref.kind === "transcript") {
+    return ref.entryId.length > 0 ? { node, call: null, event: null, index: null } : null;
   }
   if (ref.callKey.startsWith("id:")) {
     const sourceId = ref.callKey.slice(3);

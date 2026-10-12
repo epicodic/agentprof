@@ -50,7 +50,9 @@ function entityKey(ref: EntityChoice["ref"]): string {
     ? `node:${ref.nodeId}`
     : ref.kind === "call"
       ? `call:${ref.ownerId}:${ref.callKey}`
-      : `event:${ref.ownerId}:${ref.eventId}`;
+      : ref.kind === "event"
+        ? `event:${ref.ownerId}:${ref.eventId}`
+        : `transcript:${ref.ownerId}:${ref.entryId}`;
 }
 
 /** One node's activity on `view`: its span, own LLM calls on top, and tools and agents below. */

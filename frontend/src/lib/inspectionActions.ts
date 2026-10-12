@@ -4,7 +4,7 @@
 import type { ExecutionEventOut, NodeOut } from "../api/types";
 import { type CallRef, type EntityRef, sameEntity } from "./entities";
 import { linkedCallRef } from "./eventRelations";
-import { parseInspection, writeInspection } from "./inspectionLocation";
+import { type DetailTab, parseInspection, writeInspection } from "./inspectionLocation";
 
 /** Resolve unique recorded requester or consumer calls, preserving their source identity. */
 export function recordedCallTargets(
@@ -25,12 +25,23 @@ export function recordedCallTargets(
 }
 
 /** Build a durable detail URL without mutating the caller's current query parameters. */
-export function detailLink(pathname: string, params: URLSearchParams, ref: EntityRef): string {
+export function detailLink(
+  pathname: string,
+  params: URLSearchParams,
+  ref: EntityRef,
+  destinationTab?: DetailTab,
+): string {
   const current = parseInspection(ref.sessionId, params);
   const location =
     ref.kind === "node"
-      ? { ...current, nodeId: ref.nodeId, selection: ref, invalidSelection: false }
-      : { ...current, nodeId: ref.ownerId, tab: "workflow" as const, selection: ref, invalidSelection: false };
+      ? { ...current, nodeId: ref.nodeId, tab: destinationTab ?? current.tab, selection: ref, invalidSelection: false }
+      : {
+          ...current,
+          nodeId: ref.ownerId,
+          tab: destinationTab ?? (ref.kind === "transcript" ? "content" : "workflow"),
+          selection: ref,
+          invalidSelection: false,
+        };
   const query = writeInspection(params, location).toString();
   return query.length === 0 ? pathname : `${pathname}?${query}`;
 }

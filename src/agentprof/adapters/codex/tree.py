@@ -5,11 +5,23 @@
 import json
 
 from agentprof.adapters.codex.prompts import prompt_topic
-from agentprof.adapters.codex.rollout import Rollout, ToolCall, Turn, UsageRecord
+from agentprof.adapters.codex.rollout import NativeRecord, Rollout, ToolCall, Turn, UsageRecord
 from agentprof.adapters.codex.tools import tool_info
 from agentprof.adapters.execution import tool_execution_events
 from agentprof.adapters.turns import split_by_turn
-from agentprof.model import CostMetric, ExecutionEvent, LlmCall, Metric, Node, NodeKind, Tokens, iter_nodes
+from agentprof.model import (
+    CostMetric,
+    ExecutionEvent,
+    LlmCall,
+    Metric,
+    Node,
+    NodeKind,
+    Tokens,
+    TranscriptBlock,
+    TranscriptEntry,
+    iter_nodes,
+    transcript_entry_id,
+)
 from agentprof.pricing import PriceTable, Usage
 
 _ENCRYPTED_HANDOVER = "Handover unavailable: Codex stored it encrypted."
@@ -24,6 +36,12 @@ def _arguments(raw_input: str | None) -> dict[str, object]:
     except json.JSONDecodeError:
         return {"patch": raw_input} if "*** Update File:" in raw_input else {}
     return arguments if isinstance(arguments, dict) else {}
+
+
+def _native_arguments(value: object) -> dict[str, object]:
+    if isinstance(value, dict):
+        return value
+    return _arguments(value if isinstance(value, str) else None)
 
 
 def _usage(usage: UsageRecord) -> Usage:
@@ -145,7 +163,8 @@ def _tool_topic(name: str, arguments: dict[str, object]) -> str:
 
 def _turn(turn: Turn, prices: PriceTable, source_stream_id: str | None) -> Node:
     """Build one neutral turn from its direct tools and LLM usage records."""
-    calls = _llm_calls(turn, prices, source_stream_id)
+    stream_id = turn.source_stream_id or source_stream_id
+    calls = _llm_calls(turn, prices, stream_id)
     children = [_tool_node(tool) for tool in turn.tools]
     events = [
         ExecutionEvent(
@@ -153,19 +172,19 @@ def _turn(turn: Turn, prices: PriceTable, source_stream_id: str | None) -> Node:
             event_id=f"user-input:{record.message_id}" if record.message_id else None,
             start=Metric.exact(record.timestamp_ms) if record.timestamp_ms is not None else Metric.not_available(),
             source_order=record.source_order,
-            source_stream_id=source_stream_id,
+            source_stream_id=stream_id,
         )
         for record in turn.user_inputs
     ]
     for tool, child in zip(turn.tools, children, strict=True):
-        events.extend(_tool_events(tool, child, source_stream_id))
+        events.extend(_tool_events(tool, child, stream_id))
     events.extend(
         ExecutionEvent(
             kind="compaction",
             event_id=record.event_id,
             start=Metric.exact(record.timestamp_ms) if record.timestamp_ms is not None else Metric.not_available(),
             source_order=record.source_order,
-            source_stream_id=source_stream_id,
+            source_stream_id=stream_id,
         )
         for record in turn.compactions
     )
@@ -178,7 +197,7 @@ def _turn(turn: Turn, prices: PriceTable, source_stream_id: str | None) -> Node:
             result_recorded=True,
             success=result.status not in {"failed", "error", "cancelled"} if result.status is not None else None,
             result_order=result.source_order,
-            source_stream_id=source_stream_id,
+            source_stream_id=stream_id,
         )
         events.append(result_events[1])
     if turn.completion_recorded:
@@ -188,7 +207,7 @@ def _turn(turn: Turn, prices: PriceTable, source_stream_id: str | None) -> Node:
                 event_id=f"completion:{turn.turn_id}",
                 start=Metric.exact(turn.end_ms) if turn.end_ms is not None else Metric.not_available(),
                 source_order=turn.completion_order,
-                source_stream_id=source_stream_id,
+                source_stream_id=stream_id,
             )
         )
     events.sort(key=lambda event: (event.source_order is None, event.source_order or 0))
@@ -253,6 +272,151 @@ def _agent_node(rollout: Rollout, prices: PriceTable) -> Node:
     return node
 
 
+def _transcript_entry(
+    record: NativeRecord, block: TranscriptBlock, block_position: int, owner: Node
+) -> TranscriptEntry:
+    kind = record.kind
+    if block.kind in {"tool_request", "tool_result"}:
+        kind = block.kind
+        if kind == "tool_request" and isinstance(block.data, dict):
+            name = block.data.get("name")
+            arguments = _native_arguments(block.data.get("arguments"))
+            if isinstance(name, str) and tool_info(name, arguments).category.value == "subagent":
+                kind = "delegation"
+    if record.kind == "compaction":
+        kind = "compaction"
+    return TranscriptEntry(
+        entry_id=transcript_entry_id(record.source_stream_id, record.source_position, block_position, record.native_id),
+        owner_id=owner.node_id,
+        source_stream_id=record.source_stream_id,
+        source_position=record.source_position,
+        logical_stream_id=record.logical_stream_id,
+        block_position=block_position,
+        native_id=record.native_id,
+        native_ordinal=record.native_ordinal,
+        timestamp=Metric.exact(record.timestamp_ms) if record.timestamp_ms is not None else Metric.not_available(),
+        kind=kind,
+        role=record.role,
+        sender=record.sender,
+        recipient=record.recipient,
+        channel=record.channel,
+        blocks=[block],
+        source_request_id=record.response_id,
+        invocation_id=record.invocation_id,
+        ownership_evidence=record.ownership_evidence,
+    )
+
+
+def _attach_native_records(
+    root: Node,
+    main: Rollout,
+    subagents: list[Rollout],
+    agents: dict[int, Node],
+    turn_nodes: dict[tuple[str | None, str], Node],
+    delegation_subjects: dict[tuple[int, str], list[str]],
+) -> None:
+    """Attach retained source items after active-task ownership and agent nesting are known."""
+    root.transcript_coverage.source_present = main.source_present
+    for rollout in subagents:
+        agent = agents.get(id(rollout))
+        if agent is not None:
+            agent.transcript_coverage.source_present = rollout.source_present
+    for turn in main.turns:
+        owner = turn_nodes.get((turn.native_source_stream_id, turn.turn_id))
+        if owner is not None:
+            owner.transcript_coverage.source_present = turn.source_present
+    event_index: dict[tuple[str | None, str], list[ExecutionEvent]] = {}
+    invocation_subjects: dict[tuple[str, str], str] = {}
+    invocation_occurrences: dict[tuple[str, str], int] = {}
+    for rollout in (main, *subagents):
+        for record in rollout.native_records:
+            if record.kind == "tool_request" and record.invocation_id is not None:
+                key = (record.source_stream_id, record.invocation_id)
+                invocation_occurrences[key] = invocation_occurrences.get(key, 0) + 1
+    nodes = list(iter_nodes(root))
+    node_by_id: dict[str, list[Node]] = {}
+    for node in nodes:
+        node_by_id.setdefault(node.node_id, []).append(node)
+    for node in nodes:
+        for event in node.execution_events:
+            if event.event_id is not None:
+                event_index.setdefault((event.source_stream_id, event.event_id), []).append(event)
+
+    for rollout, agent in [(main, None), *((rollout, agents.get(id(rollout))) for rollout in subagents)]:
+        for record in rollout.native_records:
+            owner = agent or turn_nodes.get((record.source_stream_id, record.owner_turn_id), root)
+            blocks = record.blocks or [TranscriptBlock(kind="message")]
+            for block_position, block in enumerate(blocks):
+                entry = _transcript_entry(record, block, block_position, owner)
+                event_id: str | None = None
+                if entry.kind == "user_message" and record.native_id is not None:
+                    event_id = f"user-input:{record.native_id}"
+                elif entry.kind == "compaction" and record.event_id is not None:
+                    event_id = record.event_id
+                elif entry.invocation_id is not None and entry.kind in {"tool_request", "tool_result", "delegation"}:
+                    prefix = "tool-result" if entry.kind == "tool_result" else "tool-start"
+                    event_id = f"{prefix}:{entry.invocation_id}"
+                candidates = event_index.get((record.logical_stream_id, event_id), []) if event_id else []
+                exact = [candidate for candidate in candidates if candidate.source_order == record.source_order]
+                if len(exact) == 1:
+                    entry.event_id = exact[0].event_id
+                    subject_id = exact[0].subject_node_id
+                    subject_candidates = node_by_id.get(subject_id or "", [])
+                    subject = subject_candidates[0] if len(subject_candidates) == 1 else None
+                    invocation_key = (record.source_stream_id, entry.invocation_id or "")
+                    invocation_unique = invocation_occurrences.get(invocation_key) == 1
+                    if subject is not None and (entry.invocation_id is None or invocation_unique):
+                        entry.subject_node_id = subject.node_id
+                    if entry.kind == "delegation" and entry.invocation_id is not None and invocation_unique:
+                        matches = delegation_subjects.get((id(owner), entry.invocation_id), [])
+                        if len(matches) == 1 and len(node_by_id.get(matches[0], [])) == 1:
+                            entry.subject_node_id = matches[0]
+                    elif entry.kind == "tool_result" and entry.invocation_id is not None and invocation_unique:
+                        entry.subject_node_id = invocation_subjects.get((record.source_stream_id, entry.invocation_id))
+                    if entry.invocation_id is not None and entry.subject_node_id is not None:
+                        invocation_subjects[(record.source_stream_id, entry.invocation_id)] = entry.subject_node_id
+                owner.transcript_entries.append(entry)
+                coverage = owner.transcript_coverage
+                coverage.source_present = True
+                if entry.kind not in coverage.categories:
+                    coverage.categories.append(entry.kind)
+                if entry.timestamp.value is None and "missing_timestamps" not in coverage.reasons:
+                    coverage.reasons.append("missing_timestamps")
+                reason = {
+                    "encrypted": "encrypted_content",
+                    "unsupported": "unsupported_content",
+                    "unavailable": "unavailable_content",
+                }.get(block.availability)
+                if reason is not None and reason not in coverage.reasons:
+                    coverage.reasons.append(reason)
+        if rollout.malformed_lines:
+            owner = agent or root
+            owner.transcript_coverage.source_present = True
+            if "malformed_lines_skipped" not in owner.transcript_coverage.reasons:
+                owner.transcript_coverage.reasons.append("malformed_lines_skipped")
+    for node in iter_nodes(root):
+        node.transcript_entries.sort(
+            key=lambda entry: (entry.source_stream_id, entry.source_position, entry.block_position)
+        )
+    for rollout, agent in [(main, None), *((rollout, agents.get(id(rollout))) for rollout in subagents)]:
+        terminal_by_owner: dict[int, tuple[int, Node, str]] = {}
+        for record in rollout.native_records:
+            is_terminal = (
+                record.channel == "final" and record.kind == "assistant_message"
+            ) or record.entry_type == "agent_message"
+            if not is_terminal:
+                continue
+            owner = agent or turn_nodes.get((record.source_stream_id, record.owner_turn_id), root)
+            if owner.kind is NodeKind.SESSION:
+                continue
+            terminal_text = "\n".join(block.text for block in record.blocks if block.text is not None)
+            if any(block.text is not None and block.availability == "recorded" for block in record.blocks):
+                terminal_by_owner[id(owner)] = (record.source_position, owner, terminal_text)
+        for _, owner, terminal_text in terminal_by_owner.values():
+            if not owner.result:
+                owner.result = terminal_text
+
+
 def _link_names(rollout: Rollout) -> set[str]:
     """Return metadata labels that can identify a spawning delegation tool."""
     values = [rollout.agent_nickname]
@@ -268,10 +432,16 @@ def _delegation_matches(node: Node, names: set[str]) -> bool:
     return any(value.lower() in names for value in values)
 
 
-def _attach_agent(parent: Node, agent: Node, names: set[str]) -> bool:
+def _attach_agent(
+    parent: Node,
+    agent: Node,
+    names: set[str],
+    delegation_subjects: dict[tuple[int, str], list[str]],
+) -> bool:
     """Replace a matching delegation leaf with its corresponding subagent node."""
     for index, child in enumerate(parent.children):
         if child.kind is NodeKind.TOOL and _delegation_matches(child, names):
+            delegation_subjects.setdefault((id(parent), child.node_id), []).append(agent.node_id)
             agent.tool = child.tool
             if not agent.result:
                 agent.result = child.result
@@ -289,7 +459,7 @@ def _attach_agent(parent: Node, agent: Node, names: set[str]) -> bool:
             parent.children[index] = agent
             _append_child_completion(parent, agent)
             return True
-        if _attach_agent(child, agent, names):
+        if _attach_agent(child, agent, names, delegation_subjects):
             return True
     return False
 
@@ -335,13 +505,15 @@ def build_root(main: Rollout, subagents: list[Rollout], prices: PriceTable, titl
     root = Node(node_id="session", kind=NodeKind.SESSION, topic=title, children=turns)
     parent_nodes: dict[str, Node] = {main.thread_id or main.session_id or "": root}
     agents = [(rollout, _agent_node(rollout, prices)) for rollout in subagents]
+    agent_by_rollout = {id(rollout): agent for rollout, agent in agents}
+    delegation_subjects: dict[tuple[int, str], list[str]] = {}
     parent_nodes.update({rollout.thread_id: agent for rollout, agent in agents if rollout.thread_id is not None})
     unlinked: list[Node] = []
 
     for rollout, agent in agents:
         parent_id = _parent_thread_id(rollout)
         parent = parent_nodes.get(parent_id or "", root)
-        if not _attach_agent(parent, agent, _link_names(rollout)):
+        if not _attach_agent(parent, agent, _link_names(rollout), delegation_subjects):
             unlinked.append(agent)
     timed_turns = [turn for turn in turns if turn.start.value is not None]
     groups = split_by_turn(unlinked, _node_start, [turn.start.number() for turn in timed_turns])
@@ -364,4 +536,8 @@ def build_root(main: Rollout, subagents: list[Rollout], prices: PriceTable, titl
             node.tool.linked_agent_node_id = target.node_id
             if node.end.value is not None:
                 target.resume_times.append(node.end)
+    turn_nodes = {
+        (turn.native_source_stream_id, turn.turn_id): node for turn, node in zip(main.turns, turns, strict=False)
+    }
+    _attach_native_records(root, main, subagents, agent_by_rollout, turn_nodes, delegation_subjects)
     return root

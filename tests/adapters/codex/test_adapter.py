@@ -126,3 +126,40 @@ def test_analyze_merges_root_continuation_rollouts_into_turns(tmp_path: Path) ->
         "Summarize the findings.",
         "Continue with the real request.",
     ]
+
+
+def test_custom_root_distinguishes_same_named_rollouts_and_is_relocation_stable(tmp_path: Path) -> None:
+    def write_fixture(root: Path) -> list[str]:
+        for directory in (root / "a", root / "b"):
+            directory.mkdir(parents=True)
+            (directory / "rollout.jsonl").write_text(
+                "\n".join(
+                    [
+                        json.dumps({"type": "session_meta", "payload": {"id": "thread", "session_id": "shared"}}),
+                        json.dumps(
+                            {
+                                "type": "response_item",
+                                "ordinal": 7,
+                                "payload": {
+                                    "type": "message",
+                                    "id": "same-item",
+                                    "role": "assistant",
+                                    "content": "same body",
+                                },
+                            }
+                        ),
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+        adapter = _adapter(root)
+        (ref,) = adapter.discover()
+        session = adapter.analyze(ref)
+        entries = session.root.transcript_entries
+        assert len(entries) == 2
+        assert entries[0].entry_id != entries[1].entry_id
+        assert entries[0].source_stream_id != entries[1].source_stream_id
+        return sorted(entry.entry_id for entry in entries)
+
+    assert write_fixture(tmp_path / "first-root") == write_fixture(tmp_path / "relocated-root")

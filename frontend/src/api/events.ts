@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 epicodic
 
+import type { QueryClient } from "@tanstack/react-query";
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect } from "react";
 import { queryKeys } from "./client";
@@ -21,6 +22,11 @@ export function isStale(session: SessionOut | undefined, row: SummaryOut): boole
   return session !== undefined && row.mtime > session.mtime;
 }
 
+/** Invalidate transcript queries while retaining their cached values for refetch error states. */
+export function invalidateTranscriptCaches(queryClient: QueryClient, sessionId?: string): Promise<void> {
+  return queryClient.invalidateQueries({ queryKey: queryKeys.transcripts(sessionId) });
+}
+
 /** Keep the session list and open sessions current from the server's event stream. */
 export function useSessionEvents(): void {
   const queryClient = useQueryClient();
@@ -28,10 +34,12 @@ export function useSessionEvents(): void {
     const source = new EventSource("/api/sessions/events");
     const onOpen = () => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.sessions });
+      void invalidateTranscriptCaches(queryClient);
     };
     const onUpdated = (event: MessageEvent<string>) => {
       const row = JSON.parse(event.data) as SummaryOut;
       queryClient.setQueryData<SummaryOut[]>(queryKeys.sessions, (rows) => applyUpdate(rows, row));
+      void invalidateTranscriptCaches(queryClient, row.id);
       if (isStale(queryClient.getQueryData<SessionOut>(queryKeys.session(row.id)), row)) {
         void queryClient.invalidateQueries({ queryKey: queryKeys.session(row.id) });
         void queryClient.invalidateQueries({ queryKey: queryKeys.nodes(row.id) });
@@ -40,6 +48,7 @@ export function useSessionEvents(): void {
     const onRemoved = (event: MessageEvent<string>) => {
       const { id } = JSON.parse(event.data) as { id: string };
       queryClient.setQueryData<SummaryOut[]>(queryKeys.sessions, (rows) => applyRemoval(rows, id));
+      void invalidateTranscriptCaches(queryClient, id);
     };
     source.addEventListener("open", onOpen);
     source.addEventListener("updated", onUpdated);

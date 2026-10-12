@@ -8,6 +8,7 @@ import { formatTimestamp, MISSING } from "../lib/format";
 import { DetailLink } from "./DetailLink";
 import selectionClasses from "./EntitySelection.module.css";
 import { useInspectionMenuTarget } from "./InspectionMenu";
+import { RecordedContentLink } from "./RecordedContentLink";
 import { useSessionInteraction } from "./SessionInteraction";
 import { SourceEvidence } from "./ToolExecutionDetails";
 
@@ -105,6 +106,9 @@ export function ActivityInspectionRow({
         <Table.Tr>
           <Table.Td colSpan={5} data-detail>
             <SourceEvidence events={[event]} />
+            {eventRef !== null && (
+              <RecordedContentLink ownerId={eventRef.ownerId} eventId={eventRef.eventId} active={expanded} />
+            )}
           </Table.Td>
         </Table.Tr>
       )}
