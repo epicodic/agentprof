@@ -1,4 +1,5 @@
 from agentprof.analysis.evidence_findings import find_evidence_findings
+from agentprof.analysis.identity import assign_call_keys
 from agentprof.model import (
     CallEvent,
     CostMetric,
@@ -141,6 +142,7 @@ def test_long_gap_finding_cites_calls_and_does_not_claim_idle() -> None:
     turn = Node(node_id="turn", kind=NodeKind.TURN, topic="t", llm_calls=[earlier, later])
     root = Node(node_id="root", kind=NodeKind.SESSION, topic="s", children=[turn])
 
+    assign_call_keys(root)
     findings = find_evidence_findings(root)
     gap = next(finding for finding in findings if finding.heuristic_id == "E6")
 
@@ -192,6 +194,7 @@ def test_compaction_finding_uses_owned_compaction_event_once() -> None:
         children=[turn],
     )
 
+    assign_call_keys(root)
     findings = find_evidence_findings(root)
     compactions = [finding for finding in findings if finding.heuristic_id == "E7"]
 
@@ -217,6 +220,7 @@ def test_estimated_compaction_at_call_start_references_both_adjacent_calls() -> 
     )
     root = Node(node_id="root", kind=NodeKind.SESSION, topic="s", children=[turn])
 
+    assign_call_keys(root)
     finding = next(finding for finding in find_evidence_findings(root) if finding.heuristic_id == "E7")
 
     assert finding.evidence["earlier_call_id"] == "first"

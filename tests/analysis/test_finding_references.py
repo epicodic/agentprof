@@ -1,4 +1,5 @@
 from agentprof.analysis.finding_references import call_reference, event_reference, node_reference
+from agentprof.analysis.identity import assign_call_keys
 from agentprof.model import ExecutionEvent, LlmCall, Metric, Node, NodeKind
 
 
@@ -6,53 +7,60 @@ def _owner() -> Node:
     return Node(node_id="turn-1", kind=NodeKind.TURN, topic="prompt")
 
 
+def test_call_reference_uses_the_key_assigned_by_the_pipeline() -> None:
+    owner = _owner()
+    call = LlmCall(start=Metric.exact(10), call_id="call-1")
+    owner.llm_calls = [call]
+
+    assert call_reference(owner, call) is None  # keys are assigned by the pipeline, not on demand
+
+    assign_call_keys(owner)
+
+    reference = call_reference(owner, call)
+    assert reference is not None
+    assert reference.key == call.call_key == "id:call-1"
+
+
 def test_call_reference_uses_unique_native_id() -> None:
     owner = _owner()
     call = LlmCall(start=Metric.exact(10), call_id="call-1")
+    owner.llm_calls = [call]
+    assign_call_keys(owner)
 
-    reference = call_reference(owner, call, [call])
+    reference = call_reference(owner, call)
 
     assert reference is not None
     assert (reference.kind, reference.owner_id, reference.key) == ("call", "turn-1", "id:call-1")
     assert reference.label == "LLM call 1"
 
 
-def test_duplicate_native_call_id_does_not_fall_back_to_timestamp() -> None:
+def test_call_reference_is_unavailable_without_a_unique_identity() -> None:
     owner = _owner()
     first = LlmCall(start=Metric.exact(10), call_id="same")
     second = LlmCall(start=Metric.exact(10), call_id="same")
+    owner.llm_calls = [first, second]
 
-    assert call_reference(owner, first, [first, second]) is None
+    assert call_reference(owner, first) is None
 
 
-def test_call_without_native_id_uses_unique_exact_finite_start() -> None:
+def test_call_reference_labels_by_position_in_the_owner() -> None:
     owner = _owner()
-    call = LlmCall(start=Metric.exact(12.5))
+    first = LlmCall(start=Metric.exact(10), call_id="a")
+    second = LlmCall(start=Metric.exact(20))
+    owner.llm_calls = [first, second]
+    assign_call_keys(owner)
 
-    reference = call_reference(owner, call, [call])
+    reference = call_reference(owner, second)
 
     assert reference is not None
-    assert reference.key == "time:12.5"
+    assert (reference.key, reference.label) == ("time:20", "LLM call 2")
 
 
-def test_call_reference_preserves_large_integer_timestamp_and_stable_label() -> None:
+def test_call_reference_requires_the_call_to_belong_to_the_owner() -> None:
     owner = _owner()
-    call = LlmCall(start=Metric.exact(1_790_416_804_000))
-    owner.llm_calls = [call]
+    owner.llm_calls = [LlmCall(start=Metric.exact(1), call_id="a")]
 
-    reference = call_reference(owner, call, [call])
-
-    assert reference is not None
-    assert reference.key == "time:1790416804000"
-    assert reference.label == "LLM call 1"
-
-
-def test_estimated_call_at_same_timestamp_makes_exact_fallback_ambiguous() -> None:
-    owner = _owner()
-    exact = LlmCall(start=Metric.exact(10))
-    estimated = LlmCall(start=Metric.estimated(10))
-
-    assert call_reference(owner, exact, [exact, estimated]) is None
+    assert call_reference(owner, LlmCall(start=Metric.exact(1), call_id="a")) is None
 
 
 def test_event_reference_requires_unique_event_id_within_owner() -> None:
@@ -75,13 +83,3 @@ def test_node_reference_uses_tool_name_as_label() -> None:
         "tool-1",
         "read file",
     )
-
-
-def test_fractional_timestamp_key_uses_browser_numeric_spelling() -> None:
-    owner = _owner()
-    for timestamp, expected in ((0.00001, "time:0.00001"), (0.0000001, "time:1e-7")):
-        call = LlmCall(start=Metric.exact(timestamp))
-        owner.llm_calls = [call]
-        reference = call_reference(owner, call, owner.llm_calls)
-        assert reference is not None
-        assert reference.key == expected

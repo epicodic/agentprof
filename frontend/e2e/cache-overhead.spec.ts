@@ -3,6 +3,7 @@
 
 import { expect, type Page, test } from "@playwright/test";
 import type { FindingOut } from "../src/api/types";
+import { withCallKeys } from "../src/test/callKeys";
 import {
   cost,
   makeCall,
@@ -227,7 +228,9 @@ for (const agent of ["claude-code", "codex", "copilot-vscode"] as const) {
         cost_total: nodeCost,
       });
       const session = { ...makeSession(root), id, agent };
-      await page.route(`**/api/sessions/${encodeURIComponent(id)}`, (route) => route.fulfill({ json: session }));
+      await page.route(`**/api/sessions/${encodeURIComponent(id)}`, (route) =>
+        route.fulfill({ json: withCallKeys(session) }),
+      );
       await page.route(`**/api/sessions/${encodeURIComponent(id)}/nodes/own`, (route) =>
         route.fulfill({
           json: { node_id: "own", prompt: "Synthetic task", result: "Synthetic result", arguments: {} },

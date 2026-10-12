@@ -3,6 +3,7 @@
 
 import { expect, type Locator, test } from "@playwright/test";
 import type { SessionOut } from "../src/api/types";
+import { withCallKeys } from "../src/test/callKeys";
 import { cost, makeCall, makeExecutionEvent, makeNode, metric } from "../src/test/factories";
 import { assertNoSelectionActionControls } from "./helpers/workflowFixture";
 
@@ -64,7 +65,7 @@ test("contiguous tool invocations collapse into a triangle-controlled names row"
         start: metric(230),
       }),
     ];
-    await route.fulfill({ response, json: session });
+    await route.fulfill({ response, json: withCallKeys(session) });
   });
 
   await page.goto(`/sessions/${encodeURIComponent(SESSION)}?node=u1&tab=workflow`);
@@ -114,7 +115,7 @@ test("start and result evidence share one tool invocation with explicit details"
         success: false,
       }),
     ];
-    await route.fulfill({ response, json: session });
+    await route.fulfill({ response, json: withCallKeys(session) });
   });
 
   await page.goto(`/sessions/${encodeURIComponent(SESSION)}?node=u1&tab=workflow`);
@@ -163,7 +164,7 @@ test("activity events stay individually addressable and their evidence expands i
         start: metric((turn.start.value ?? 0) + 200),
       }),
     ];
-    await route.fulfill({ response, json: session });
+    await route.fulfill({ response, json: withCallKeys(session) });
   });
 
   await page.goto(`/sessions/${encodeURIComponent(SESSION)}?node=u1&tab=workflow`);
@@ -191,7 +192,7 @@ test("Calls sorting is controlled by the visible column headers", async ({ page 
       makeCall({ model: "sort-high", start: metric(200), cost: cost(9, "USD", undefined, 9) }),
     ];
     turn.execution_events = [];
-    await route.fulfill({ response, json: session });
+    await route.fulfill({ response, json: withCallKeys(session) });
   });
 
   await page.goto(`/sessions/${encodeURIComponent(SESSION)}?node=u1&tab=workflow`);
@@ -240,7 +241,7 @@ test("Calls summaries stay on one line and expose readable tool details before s
         success: false,
       }),
     ];
-    await route.fulfill({ response, json: session });
+    await route.fulfill({ response, json: withCallKeys(session) });
   });
   for (const viewport of [
     { width: 1440, height: 900 },
@@ -416,7 +417,7 @@ test("tool requester and result user links reveal and mark calls without expandi
         start: metric(time + 40_000),
       }),
     ];
-    await route.fulfill({ response, json: session });
+    await route.fulfill({ response, json: withCallKeys(session) });
   });
   for (const viewport of [
     { width: 1440, height: 900 },
@@ -615,7 +616,7 @@ test("tool relationship jumps to a call owned by another turn without expanding 
         ],
       }),
     ];
-    await route.fulfill({ response, json: session });
+    await route.fulfill({ response, json: withCallKeys(session) });
   });
   await page.goto(`/sessions/${encodeURIComponent(SESSION)}?node=u1&tab=workflow`);
   await openWorkflowCalls(page.getByRole("dialog"));

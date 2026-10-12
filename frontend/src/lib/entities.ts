@@ -34,52 +34,20 @@ export function agentNode(root: NodeOut, agentId: number): NodeOut | null {
   return visit(root);
 }
 
+function keyedCallRef(sessionId: string, ownerId: string, call: LlmCallOut): CallRef | null {
+  return call.call_key ? { kind: "call", sessionId, ownerId, callKey: call.call_key } : null;
+}
+
+/** The server-assigned identity of one call; `null` when the call has no unique identity. */
 export function callRef(sessionId: string, owner: NodeOut, index: number): CallRef | null {
   const call = owner.llm_calls[index];
   if (call === undefined || !Number.isInteger(index) || index < 0) return null;
-
-  if (typeof call.call_id === "string" && call.call_id.length > 0) {
-    const matches = owner.llm_calls.filter((candidate) => candidate.call_id === call.call_id).length;
-    if (matches !== 1) return null;
-    return { kind: "call", sessionId, ownerId: owner.node_id, callKey: `id:${call.call_id}` };
-  }
-
-  const start = call.start;
-  if (start.provenance !== "exact" || start.value === null || !Number.isFinite(start.value)) return null;
-  const matches = owner.llm_calls.filter((candidate) => candidate.start.value === start.value).length;
-  if (matches !== 1) return null;
-  return { kind: "call", sessionId, ownerId: owner.node_id, callKey: `time:${start.value}` };
+  return keyedCallRef(sessionId, owner.node_id, call);
 }
 
-/** Resolve identities for every call with one pass over the owner's calls. */
+/** The server-assigned identity of every call of `owner`. */
 export function callRefs(sessionId: string, owner: Pick<NodeOut, "node_id" | "llm_calls">): (CallRef | null)[] {
-  const idCounts = new Map<string, number>();
-  const timeCounts = new Map<number, number>();
-  for (const call of owner.llm_calls) {
-    const callId = call.call_id;
-    if (typeof callId === "string" && callId.length > 0) {
-      idCounts.set(callId, (idCounts.get(callId) ?? 0) + 1);
-    }
-    const start = call.start;
-    if (start.value !== null && Number.isFinite(start.value)) {
-      timeCounts.set(start.value, (timeCounts.get(start.value) ?? 0) + 1);
-    }
-  }
-  return owner.llm_calls.map((call) => {
-    const callId = call.call_id;
-    if (typeof callId === "string" && callId.length > 0) {
-      return idCounts.get(callId) === 1
-        ? { kind: "call", sessionId, ownerId: owner.node_id, callKey: `id:${callId}` }
-        : null;
-    }
-    const start = call.start;
-    return start.provenance === "exact" &&
-      start.value !== null &&
-      Number.isFinite(start.value) &&
-      timeCounts.get(start.value) === 1
-      ? { kind: "call", sessionId, ownerId: owner.node_id, callKey: `time:${start.value}` }
-      : null;
-  });
+  return owner.llm_calls.map((call) => keyedCallRef(sessionId, owner.node_id, call));
 }
 
 export type EventRef = Extract<EntityRef, { kind: "event" }>;
@@ -151,43 +119,9 @@ export function resolveEntity(root: NodeOut, sessionId: string, ref: EntityRef):
   if (ref.kind === "transcript") {
     return ref.entryId.length > 0 ? { node, call: null, event: null, index: null } : null;
   }
-  if (ref.callKey.startsWith("id:")) {
-    const sourceId = ref.callKey.slice(3);
-    if (sourceId.length === 0) return null;
-    let matchIndex: number | null = null;
-    let matches = 0;
-    for (let index = 0; index < node.llm_calls.length; index += 1) {
-      if (node.llm_calls[index].call_id === sourceId) {
-        matchIndex = index;
-        matches += 1;
-      }
-    }
-    if (matches !== 1 || matchIndex === null) return null;
-    const candidate = callRef(sessionId, node, matchIndex);
-    return candidate !== null && sameEntity(candidate, ref)
-      ? { node, call: node.llm_calls[matchIndex], event: null, index: matchIndex }
-      : null;
-  }
-
-  if (!ref.callKey.startsWith("time:")) return null;
-  const timestampText = ref.callKey.slice(5);
-  const timestamp = Number(timestampText);
-  if (!Number.isFinite(timestamp) || String(timestamp) !== timestampText) return null;
-
-  let matchIndex: number | null = null;
-  let matches = 0;
-  for (let index = 0; index < node.llm_calls.length; index += 1) {
-    const call = node.llm_calls[index];
-    if (call.start.value === timestamp) {
-      matches += 1;
-      if (call.start.provenance === "exact") matchIndex = index;
-    }
-  }
-  if (matches !== 1 || matchIndex === null) return null;
-  const candidate = callRef(sessionId, node, matchIndex);
-  return candidate !== null && sameEntity(candidate, ref)
-    ? { node, call: node.llm_calls[matchIndex], event: null, index: matchIndex }
-    : null;
+  if (ref.callKey.length === 0) return null;
+  const index = node.llm_calls.findIndex((call) => call.call_key === ref.callKey);
+  return index < 0 ? null : { node, call: node.llm_calls[index], event: null, index };
 }
 
 export function relationToNode(

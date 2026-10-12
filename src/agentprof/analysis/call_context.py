@@ -6,6 +6,7 @@ from bisect import bisect_left, bisect_right
 from collections import defaultdict
 from itertools import pairwise
 
+from agentprof.analysis.identity import owned_nodes
 from agentprof.model import CallEvent, LlmCall, Metric, Node, NodeKind, Provenance, worst_provenance
 
 _LARGE_CACHE_WRITE_TOKENS = 50_000
@@ -47,9 +48,7 @@ def annotate_call_context(root: Node) -> None:
     events: dict[str, list[CallEvent]] = defaultdict(list)
     compactions: dict[str, list[Metric]] = defaultdict(list)
 
-    def visit(node: Node, owner: str) -> None:
-        if node.kind is NodeKind.AGENT:
-            owner = node.agent_uuid or node.node_id
+    for owner, node in owned_nodes(root):
         if node.kind in (NodeKind.TURN, NodeKind.AGENT):
             calls[owner].extend(call for call in node.llm_calls if call.in_context and call.start.value is not None)
             compactions[owner].extend(node.compactions)
@@ -59,9 +58,6 @@ def annotate_call_context(root: Node) -> None:
             event = _event(child)
             if event is not None:
                 events[owner].append(event)
-            visit(child, owner)
-
-    visit(root, "main")
     for owner, owned_calls in calls.items():
         owned_calls.sort(key=lambda call: call.start.number())
         timed_events = sorted(

@@ -230,7 +230,8 @@ class Registry:
         except Exception as error:  # noqa: BLE001 - reported to the caller as unavailable
             message = _describe(error)
             with self._lock:
-                self._failures[session_id] = (ref.mtime, message)
+                if session_id in self._rows:
+                    self._failures[session_id] = (ref.mtime, message)
             raise SessionUnavailable(message) from error
         else:
             with self._lock:

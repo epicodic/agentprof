@@ -4,6 +4,7 @@
 
 from collections import defaultdict
 
+from agentprof.analysis.identity import owned_nodes
 from agentprof.model import EventCallLink, LlmCall, Node, NodeKind
 
 _VALID_EVIDENCE = {
@@ -18,18 +19,12 @@ def resolve_execution_links(root: Node) -> None:
     calls: dict[str, dict[str, list[tuple[str, LlmCall]]]] = defaultdict(lambda: defaultdict(list))
     pending: list[tuple[str, EventCallLink]] = []
 
-    def visit(node: Node, owner: str) -> None:
-        if node.kind is NodeKind.AGENT:
-            owner = node.agent_uuid or node.node_id
+    for owner, node in owned_nodes(root):
         if node.kind in (NodeKind.SESSION, NodeKind.TURN, NodeKind.AGENT):
             for call in node.llm_calls:
                 if call.source_request_id:
                     calls[owner][call.source_request_id].append((node.node_id, call))
         pending.extend((owner, link) for event in node.execution_events for link in event.links)
-        for child in node.children:
-            visit(child, owner)
-
-    visit(root, "main")
     for owner, link in pending:
         link.owner_id = None
         if _VALID_EVIDENCE.get(link.relation) != link.evidence:

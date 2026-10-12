@@ -2,6 +2,7 @@
 // Copyright (c) 2026 epicodic
 
 import { describe, expect, it } from "vitest";
+import { withCallKeys } from "../test/callKeys";
 import { cost, makeCall, makeExecutionEvent, makeNode, metric } from "../test/factories";
 import type { EntityRef } from "./entities";
 import {
@@ -28,7 +29,7 @@ function requiredCallRef(sessionId: string, owner: ReturnType<typeof makeNode>, 
 const ownerTree = (calls: ReturnType<typeof makeCall>[], ownerId = "owner") => {
   const owner = makeNode({ node_id: ownerId, kind: "agent", llm_calls: calls });
   const child = makeNode({ node_id: "child", kind: "turn", children: [owner] });
-  return makeNode({ node_id: "root", kind: "session", children: [child] });
+  return withCallKeys(makeNode({ node_id: "root", kind: "session", children: [child] }));
 };
 
 describe("callRef", () => {
@@ -62,80 +63,25 @@ describe("callRef", () => {
     expect(resolveEntity(root, "s", fallbackRef)).toEqual({ node: owner, call: fallbackCall, event: null, index: 0 });
   });
 
-  it("rejects duplicate source IDs and duplicate exact timestamps", () => {
-    expect(callRef("s", makeNode({ node_id: "o", llm_calls: [callAt(1, "dup"), callAt(2, "dup")] }), 0)).toBeNull();
-    expect(callRef("s", makeNode({ node_id: "o", llm_calls: [callAt(1), callAt(1)] }), 0)).toBeNull();
-  });
-
-  it("counts native-ID calls when deciding whether a fallback timestamp is unique", () => {
-    const owner = makeNode({ node_id: "o", llm_calls: [callAt(1, "native"), callAt(1)] });
-    expect(callRef("s", owner, 1)).toBeNull();
-  });
-
-  it("does not give fallback identity to unavailable or estimated timestamps", () => {
-    const owner = makeNode({
-      node_id: "o",
-      llm_calls: [callAt(null), callAt(2, null, "estimated"), callAt(Number.NaN), callAt(Number.POSITIVE_INFINITY)],
-    });
-    expect(owner.llm_calls.map((_, index) => callRef("s", owner, index))).toEqual([null, null, null, null]);
-    expect(callRef("s", makeNode({ node_id: "o", llm_calls: [callAt(null, "native")] }), 0)?.callKey).toBe("id:native");
+  it("rejects indexes outside the owner's calls", () => {
+    const owner = withCallKeys(makeNode({ node_id: "o", llm_calls: [callAt(null, "native")] }));
+    expect(callRef("s", owner, 0)?.callKey).toBe("id:native");
     expect(callRef("s", owner, -1)).toBeNull();
+    expect(callRef("s", owner, 0.5)).toBeNull();
     expect(callRef("s", owner, owner.llm_calls.length)).toBeNull();
   });
 });
 
-describe("callRefs", () => {
-  it("matches single-call identities while rejecting ambiguous ids and times", () => {
-    const node = makeNode({
-      node_id: "owner",
-      llm_calls: [
-        makeCall({ call_id: "unique", start: metric(1, "exact") }),
-        makeCall({ call_id: "duplicate", start: metric(2, "exact") }),
-        makeCall({ call_id: "duplicate", start: metric(3, "exact") }),
-        makeCall({ call_id: null, start: metric(4, "exact") }),
-        makeCall({ call_id: null, start: metric(4, "exact") }),
-        makeCall({ call_id: null, start: metric(5, "exact") }),
-        makeCall({ call_id: "estimated", start: metric(5, "estimated") }),
-      ],
+describe("server call keys", () => {
+  it("uses the server key and treats a call without one as unaddressable", () => {
+    const owner = makeNode({
+      node_id: "o",
+      llm_calls: [makeCall({ call_id: "a", call_key: "id:a" }), makeCall({ call_id: "b", call_key: null })],
     });
 
-    expect(callRefs("session", node)).toEqual([
-      callRef("session", node, 0),
-      null,
-      null,
-      null,
-      null,
-      null,
-      callRef("session", node, 6),
-    ]);
-  });
-
-  it("reads each call a bounded number of times", () => {
-    let reads = 0;
-    const calls = Array.from({ length: 100 }, (_, index) => {
-      const call = makeCall({ call_id: `call-${index}`, start: metric(index, "exact") });
-      return call;
-    });
-    const node = makeNode({ node_id: "owner", llm_calls: calls });
-    for (const call of node.llm_calls) {
-      const callId = call.call_id;
-      const start = call.start;
-      Object.defineProperty(call, "call_id", {
-        get() {
-          reads += 1;
-          return callId;
-        },
-      });
-      Object.defineProperty(call, "start", {
-        get() {
-          reads += 1;
-          return start;
-        },
-      });
-    }
-
-    expect(callRefs("session", node)).toHaveLength(calls.length);
-    expect(reads).toBeLessThanOrEqual(calls.length * 5);
+    expect(callRefs("s", owner)).toEqual([{ kind: "call", sessionId: "s", ownerId: "o", callKey: "id:a" }, null]);
+    expect(resolveEntity(owner, "s", { kind: "call", sessionId: "s", ownerId: "o", callKey: "id:a" })?.index).toBe(0);
+    expect(resolveEntity(owner, "s", { kind: "call", sessionId: "s", ownerId: "o", callKey: "id:b" })).toBeNull();
   });
 });
 
@@ -214,13 +160,6 @@ describe("entity refs and resolution", () => {
     expect(resolveEntity(root, "s", { ...call, callKey: "time:99" })).toBeNull();
   });
 
-  it("returns null when a previously stable call becomes ambiguous", () => {
-    const owner = makeNode({ node_id: "owner", kind: "agent", llm_calls: [callAt(10)] });
-    const ref = requiredCallRef("s", owner, 0);
-    const root = ownerTree([owner.llm_calls[0], callAt(10)]);
-    expect(resolveEntity(root, "s", ref)).toBeNull();
-  });
-
   it("returns null after the referenced call is removed", () => {
     const root = ownerTree([callAt(10, "native")]);
     const owner = root.children[0].children[0];
@@ -232,19 +171,18 @@ describe("entity refs and resolution", () => {
   it("resolves known and missing source IDs with a bounded linear number of reads", () => {
     const size = 1_000;
     let callIdReads = 0;
-    const calls = Array.from({ length: size }, (_, index) => {
-      const call = callAt(index, `native-${index}`);
-      const callId = call.call_id;
-      Object.defineProperty(call, "call_id", {
-        get: () => {
-          callIdReads += 1;
-          return callId;
-        },
-      });
-      return call;
-    });
+    const calls = Array.from({ length: size }, (_, index) => callAt(index, `native-${index}`));
     const root = ownerTree(calls);
     const owner = root.children[0].children[0];
+    for (const call of owner.llm_calls) {
+      const callKey = call.call_key;
+      Object.defineProperty(call, "call_key", {
+        get: () => {
+          callIdReads += 1;
+          return callKey;
+        },
+      });
+    }
     const knownRef = callRef("s", owner, size - 1);
     expect(knownRef?.kind).toBe("call");
     if (knownRef?.kind !== "call") throw new Error("expected a call reference");
@@ -257,7 +195,7 @@ describe("entity refs and resolution", () => {
 
   it("keeps a source-ID reference through mutable call resources", () => {
     const call = callAt(10, "native");
-    const owner = makeNode({ node_id: "owner", llm_calls: [call] });
+    const owner = withCallKeys(makeNode({ node_id: "owner", llm_calls: [call] }));
     const ref = requiredCallRef("s", owner, 0);
     call.start = metric(30);
     call.duration = metric(99);
@@ -283,7 +221,9 @@ describe("entity refs and resolution", () => {
 
 describe("relationToNode", () => {
   it("marks only an exact selected node and never marks owners or ancestors for calls", () => {
-    const selected = makeNode({ node_id: "selected", kind: "agent", llm_calls: [callAt(1, "selected-call")] });
+    const selected = withCallKeys(
+      makeNode({ node_id: "selected", kind: "agent", llm_calls: [callAt(1, "selected-call")] }),
+    );
     const descendant = makeNode({ node_id: "descendant", kind: "agent" });
     const unrelated = makeNode({ node_id: "unrelated", kind: "turn" });
     const root = makeNode({
@@ -317,7 +257,7 @@ describe("relationsToNodes", () => {
       kind: "turn",
       llm_calls: [makeCall({ call_id: "request", start: metric(10) })],
     });
-    const root = makeNode({ node_id: "session", kind: "session", children: [turn] });
+    const root = withCallKeys(makeNode({ node_id: "session", kind: "session", children: [turn] }));
     const ref = requiredCallRef("s", turn, 0);
     expect(relationToNode(root, "s", ref, "turn")).toBe("none");
     expect(relationToNode(root, "s", ref, "session")).toBe("none");

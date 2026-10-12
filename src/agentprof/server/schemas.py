@@ -82,6 +82,7 @@ class LlmCallOut(BaseModel):
     source_order: int | None = None
     source_stream_id: str | None = None
     timing_basis: Literal["request_start", "assistant_message", "usage_report", "turn_start", "unknown"] = "unknown"
+    call_key: str | None = None
 
 
 class CallEventOut(BaseModel):
@@ -336,6 +337,7 @@ def _llm_call_out(call: LlmCall) -> LlmCallOut:
         source_order=call.source_order,
         source_stream_id=call.source_stream_id,
         timing_basis=call.timing_basis,
+        call_key=call.call_key,
     )
 
 

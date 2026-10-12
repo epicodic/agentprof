@@ -552,3 +552,10 @@ def test_finding_out_includes_reference_and_observed_cost_defaults() -> None:
     assert out["references"] == []
     assert out["observed_cost"] == {"value": None, "unit": None, "usd": None, "provenance": "n/a"}
     assert out["avoidable_cost_baseline"] is None
+
+
+def test_node_out_sends_the_call_key() -> None:
+    call = LlmCall(start=Metric.exact(1), call_id="a", call_key="id:a")
+    turn = Node(node_id="turn", kind=NodeKind.TURN, topic="turn", llm_calls=[call])
+
+    assert node_out(turn).llm_calls[0].call_key == "id:a"

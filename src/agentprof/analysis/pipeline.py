@@ -7,6 +7,7 @@ from agentprof.analysis.call_context import annotate_call_context
 from agentprof.analysis.evidence_findings import find_evidence_findings
 from agentprof.analysis.execution import resolve_execution_links
 from agentprof.analysis.heuristics import find_findings
+from agentprof.analysis.identity import assign_call_keys
 from agentprof.analysis.rollup import roll_up
 from agentprof.model import Finding, Node, Session, iter_nodes
 
@@ -24,6 +25,7 @@ def attach_findings(root: Node, findings: list[Finding]) -> None:
 def analyze(adapter: AgentAdapter, ref: SessionRef) -> Session:
     """Parse `ref` with `adapter`, fill derived metrics, and attach waste findings."""
     session = adapter.analyze(ref)
+    assign_call_keys(session.root)
     resolve_execution_links(session.root)
     roll_up(session.root)
     annotate_call_context(session.root)

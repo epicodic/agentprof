@@ -2,22 +2,25 @@
 // Copyright (c) 2026 epicodic
 
 import { describe, expect, it } from "vitest";
+import { withCallKeys } from "../test/callKeys";
 import { makeCall, makeExecutionEvent, makeNode } from "../test/factories";
 import { resolveFindingReference } from "./findingReferences";
 
 describe("resolveFindingReference", () => {
-  const root = makeNode({
-    node_id: "session",
-    kind: "session",
-    children: [
-      makeNode({
-        node_id: "owner",
-        kind: "turn",
-        llm_calls: [makeCall({ call_id: "c1" })],
-        execution_events: [makeExecutionEvent({ event_id: "e1" })],
-      }),
-    ],
-  });
+  const root = withCallKeys(
+    makeNode({
+      node_id: "session",
+      kind: "session",
+      children: [
+        makeNode({
+          node_id: "owner",
+          kind: "turn",
+          llm_calls: [makeCall({ call_id: "c1" })],
+          execution_events: [makeExecutionEvent({ event_id: "e1" })],
+        }),
+      ],
+    }),
+  );
 
   it("retains the referenced owner for calls and events and resolves node keys", () => {
     expect(

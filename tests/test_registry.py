@@ -451,3 +451,66 @@ def test_worker_survives_a_failing_iteration() -> None:
 def _state(registry: Registry, session_id: str) -> RowState | None:
     row = registry.row(session_id)
     return row.state if row is not None else None
+
+
+def test_concurrent_requests_share_one_failed_analysis() -> None:
+    adapter = FakeAdapter()
+    adapter.add("a", 100.0)
+    adapter.broken.add("a")
+    registry = Registry([adapter])
+    registry.refresh()
+    gate = threading.Event()
+    entered = threading.Event()
+    original = adapter.analyze
+
+    def slow_analyze(ref: SessionRef) -> Session:
+        entered.set()
+        gate.wait(timeout=5)
+        return original(ref)
+
+    setattr(adapter, "analyze", slow_analyze)  # noqa: B010
+    errors: list[str] = []
+
+    def request() -> None:
+        try:
+            registry.session("fake:a")
+        except SessionUnavailable as error:
+            errors.append(str(error))
+
+    threads = [threading.Thread(target=request) for _ in range(3)]
+    threads[0].start()
+    assert entered.wait(timeout=5)
+    for thread in threads[1:]:
+        thread.start()
+    time.sleep(0.1)  # let the others reach the in-flight wait; late waiters still get the remembered failure
+    gate.set()
+    for thread in threads:
+        thread.join(timeout=5)
+
+    assert errors == ["ValueError: broken file"] * 3
+    assert adapter.analyzed == ["a"]
+
+
+def test_a_failure_of_a_session_that_vanished_meanwhile_is_not_remembered() -> None:
+    adapter = FakeAdapter()
+    adapter.add("a", 100.0)
+    adapter.broken.add("a")
+    registry = Registry([adapter])
+    registry.refresh()
+    original = adapter.analyze
+
+    def vanish_then_fail(ref: SessionRef) -> Session:
+        del adapter.refs["a"]
+        registry.refresh()
+        return original(ref)
+
+    setattr(adapter, "analyze", vanish_then_fail)  # noqa: B010
+    with pytest.raises(SessionUnavailable):
+        registry.session("fake:a")
+
+    setattr(adapter, "analyze", original)  # noqa: B010
+    adapter.broken.clear()
+    adapter.add("a", 100.0)
+    registry.refresh()
+    registry.session("fake:a")
+    assert adapter.analyzed == ["a", "a"]

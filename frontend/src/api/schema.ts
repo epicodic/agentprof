@@ -436,6 +436,8 @@ export interface components {
              * @enum {string}
              */
             timing_basis: "request_start" | "assistant_message" | "usage_report" | "turn_start" | "unknown";
+            /** Call Key */
+            call_key?: string | null;
         };
         /** MalformedLineDetailOut */
         MalformedLineDetailOut: {

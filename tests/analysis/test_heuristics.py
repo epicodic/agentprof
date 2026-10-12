@@ -2,6 +2,7 @@
 # Copyright (c) 2026 epicodic
 
 from agentprof.analysis.heuristics import find_findings
+from agentprof.analysis.identity import assign_call_keys
 from agentprof.model import (
     CostMetric,
     Finding,
@@ -348,6 +349,7 @@ def test_context_bloat_finding_references_supporting_calls() -> None:
     ]
     agent = _agent("a1", [])
     agent.llm_calls = calls
+    assign_call_keys(agent)
 
     finding = next(finding for finding in find_findings(agent) if finding.heuristic_id == "W8")
 

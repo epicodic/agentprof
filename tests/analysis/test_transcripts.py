@@ -6,6 +6,7 @@ import json
 
 import pytest
 
+from agentprof.analysis.identity import assign_call_keys
 from agentprof.analysis.transcripts import (
     TranscriptCursorError,
     decode_cursor,
@@ -189,6 +190,7 @@ def test_large_nested_transcript_filters_resolve_exact_call_and_event_once() -> 
         parent.children.append(child)
         parent = child
 
+    assign_call_keys(root)
     call_matches = scope_entries(root, "root", call_key="id:call-319")
     event_matches = scope_entries(root, "root", event_id="event-319")
 
@@ -285,6 +287,8 @@ def test_duplicate_owner_or_subject_node_ids_do_not_resolve_arbitrarily() -> Non
         node_id="root", kind=NodeKind.SESSION, topic="root", children=[owner, duplicate_owner, subject_a, subject_b]
     )
 
+    assign_call_keys(root)
+
     assert supporting_references(root, entry) == []
 
     unique_owner = Node(
@@ -299,6 +303,7 @@ def test_duplicate_owner_or_subject_node_ids_do_not_resolve_arbitrarily() -> Non
     unique_owner_root = Node(
         node_id="unique-root", kind=NodeKind.SESSION, topic="root", children=[unique_owner, subject_a, subject_b]
     )
+    assign_call_keys(unique_owner_root)
     assert [(reference.kind, reference.key) for reference in supporting_references(unique_owner_root, entry)] == [
         ("call", "id:call")
     ]
@@ -369,6 +374,7 @@ def test_call_reference_uses_existing_stable_key_and_exact_logical_stream() -> N
         transcript_entries=[entry],
     )
 
+    assign_call_keys(owner)
     (reference,) = __import__(
         "agentprof.analysis.transcripts", fromlist=["supporting_references"]
     ).supporting_references(owner, entry)

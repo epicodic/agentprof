@@ -1,0 +1,64 @@
+[
+  {
+    "name": "unique ids",
+    "calls": [
+      { "call_id": "a", "start": 1, "provenance": "exact" },
+      { "call_id": "b", "start": 2, "provenance": "exact" }
+    ],
+    "keys": ["id:a", "id:b"]
+  },
+  {
+    "name": "duplicate ids never fall back to time",
+    "calls": [
+      { "call_id": "a", "start": 1, "provenance": "exact" },
+      { "call_id": "a", "start": 2, "provenance": "exact" }
+    ],
+    "keys": [null, null]
+  },
+  {
+    "name": "empty id falls back to time",
+    "calls": [{ "call_id": "", "start": 5, "provenance": "exact" }],
+    "keys": ["time:5"]
+  },
+  {
+    "name": "no id with unique exact start",
+    "calls": [
+      { "call_id": null, "start": 1, "provenance": "exact" },
+      { "call_id": null, "start": 2, "provenance": "exact" }
+    ],
+    "keys": ["time:1", "time:2"]
+  },
+  {
+    "name": "estimated start has no key",
+    "calls": [{ "call_id": null, "start": 3, "provenance": "estimated" }],
+    "keys": [null]
+  },
+  {
+    "name": "start shared with an estimated call",
+    "calls": [
+      { "call_id": null, "start": 4, "provenance": "exact" },
+      { "call_id": null, "start": 4, "provenance": "estimated" }
+    ],
+    "keys": [null, null]
+  },
+  {
+    "name": "missing start has no key",
+    "calls": [{ "call_id": null, "start": null, "provenance": "n/a" }],
+    "keys": [null]
+  },
+  {
+    "name": "integer millisecond timestamp",
+    "calls": [{ "call_id": null, "start": 1790416804000, "provenance": "exact" }],
+    "keys": ["time:1790416804000"]
+  },
+  {
+    "name": "fractional timestamp",
+    "calls": [{ "call_id": null, "start": 12.5, "provenance": "exact" }],
+    "keys": ["time:12.5"]
+  },
+  {
+    "name": "small timestamp",
+    "calls": [{ "call_id": null, "start": 0.00001, "provenance": "exact" }],
+    "keys": ["time:0.00001"]
+  }
+]

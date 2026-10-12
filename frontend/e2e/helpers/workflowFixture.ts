@@ -3,6 +3,7 @@
 
 import { expect, type Page, test } from "@playwright/test";
 import type { NodeDetailOut, SessionOut } from "../../src/api/types";
+import { withCallKeys } from "../../src/test/callKeys";
 import { cost, makeCall, makeNode, metric, tokens } from "../../src/test/factories";
 import { deepWorkflow } from "../../src/test/workflowFixtures";
 
@@ -125,7 +126,7 @@ export async function installDeepWorkflow(
       await route.fulfill({
         status: response.status(),
         headers: response.headers(),
-        json: session,
+        json: withCallKeys(session),
       });
       return;
     }

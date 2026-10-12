@@ -3,6 +3,7 @@
 
 import { expect, type Locator, type Page, test } from "@playwright/test";
 import type { LlmCallOut, NodeOut, SessionOut } from "../src/api/types";
+import { withCallKeys } from "../src/test/callKeys";
 import {
   cost,
   makeCall,
@@ -46,7 +47,7 @@ async function installReadResultEvent(page: Page): Promise<void> {
         ],
       }),
     ];
-    await route.fulfill({ response, json: session });
+    await route.fulfill({ response, json: withCallKeys(session) });
   });
 }
 
@@ -121,7 +122,7 @@ test("reopens a reserved native call ID from its encoded deep link after reload"
     const session = (await response.json()) as SessionOut;
     const turn = selectionTurn(session);
     turn.llm_calls[0].call_id = reservedCallId;
-    await route.fulfill({ response, json: session });
+    await route.fulfill({ response, json: withCallKeys(session) });
   });
 
   const params = new URLSearchParams({
@@ -147,7 +148,7 @@ test("a selection-only deep link does not expand ancestors or open an inspection
   await page.route(`**/api/sessions/${encodeURIComponent(SESSION)}`, async (route) => {
     const response = await route.fetch();
     const session = (await response.json()) as SessionOut;
-    await route.fulfill({ response, json: session });
+    await route.fulfill({ response, json: withCallKeys(session) });
   });
   await page.goto(sessionUrl({ sel: "node", entity: "toolu_agent2" }));
   await expect(page.getByTestId("tree-row-u1")).toBeVisible();
@@ -262,7 +263,7 @@ test("restores the Workflow reading position after navigating into a child", asy
     }));
     turn.end = { value: turn.start.value + 50000, provenance: "exact" };
     session.root.end = { value: turn.start.value + 50000, provenance: "exact" };
-    await route.fulfill({ response, json: session });
+    await route.fulfill({ response, json: withCallKeys(session) });
   });
 
   await page.goto(sessionUrl({ node: "session", tab: "workflow" }));
@@ -303,7 +304,7 @@ test("restores tree and call table state from browser history", async ({ page })
         children: [],
       })),
     ];
-    await route.fulfill({ response, json: session });
+    await route.fulfill({ response, json: withCallKeys(session) });
   });
 
   await page.goto(sessionUrl({ node: "session", tab: "workflow" }));
@@ -360,7 +361,7 @@ test("keeps a collapsed call closed when a newer session update refetches the tr
       turn.end = metric((turn.start.value ?? 0) + 50000);
       fixture.current.root.end = metric((turn.start.value ?? 0) + 50000);
     }
-    await route.fulfill({ json: fixture.current });
+    await route.fulfill({ json: withCallKeys(fixture.current) });
   });
   await page.goto(
     sessionUrl({ node: "u1", tab: "workflow", sel: "call", owner: "u1", call: "id:selection-fixture-19" }),
@@ -444,7 +445,7 @@ test("frontend invalidation clears a snapshot-local mark before call indexes shi
       turn.llm_calls[2].call_id = null;
       turn.llm_calls[2].start.provenance = "estimated";
     }
-    await route.fulfill({ json: fixture.current });
+    await route.fulfill({ json: withCallKeys(fixture.current) });
   });
   await page.goto(sessionUrl({ node: "u1", tab: "workflow" }));
   const dialog = page.getByRole("dialog");
@@ -471,7 +472,7 @@ test("frontend invalidation closes an inspection menu when its source row disapp
       const response = await route.fetch();
       fixture.current = (await response.json()) as SessionOut;
     }
-    await route.fulfill({ json: fixture.current });
+    await route.fulfill({ json: withCallKeys(fixture.current) });
   });
   await page.goto(sessionUrl());
   const row = page.getByTestId("tree-row-u1");
@@ -514,7 +515,7 @@ test("frontend invalidation preserves a unique artifact path mark", async ({ pag
       artifact.tool.writes_file = true;
       turn.children.push(artifact);
     }
-    await route.fulfill({ json: fixture.current });
+    await route.fulfill({ json: withCallKeys(fixture.current) });
   });
   await page.goto(sessionUrl({ node: "u1", tab: "content" }));
   const row = page.getByRole("dialog").getByTestId("artifact-src/stable-path.py");
@@ -554,7 +555,7 @@ test("frontend invalidation preserves one uniquely matched finding after sort or
         estimated_avoidable_cost: { value: null, unit: null, usd: null, provenance: "n/a" },
       });
     }
-    await route.fulfill({ json: fixture.current });
+    await route.fulfill({ json: withCallKeys(fixture.current) });
   });
   await page.goto(sessionUrl());
   await page.getByRole("button", { name: /Findings \(/ }).click();
@@ -598,7 +599,7 @@ test("frontend invalidation expires a mark when duplicate findings collapse to o
       };
       fixture.current.root.findings.push(structuredClone(finding), structuredClone(finding));
     }
-    await route.fulfill({ json: fixture.current });
+    await route.fulfill({ json: withCallKeys(fixture.current) });
   });
   await page.goto(sessionUrl());
   await page.getByRole("button", { name: /Findings \(/ }).click();
@@ -625,7 +626,7 @@ test("duplicate node-only tool subjects remain independent local marks with inli
       makeTool("duplicate-tool", "Read duplicate A", { topic: "Duplicate tool A", start: metric(3_000) }),
       makeTool("duplicate-tool", "Read duplicate B", { topic: "Duplicate tool B", start: metric(4_000) }),
     );
-    await route.fulfill({ response, json: session });
+    await route.fulfill({ response, json: withCallKeys(session) });
   });
   await page.goto(sessionUrl({ node: "u1", tab: "workflow" }));
   await openDisclosure(page.getByRole("dialog"), "workflow-calls");
@@ -663,7 +664,7 @@ test("search keeps the original contiguous tool group context for a partial matc
       }),
       makeTool("ordinary-tool", "Read", { topic: "Routine source file", start: metric((turn.start.value ?? 0) + 200) }),
     ];
-    await route.fulfill({ response, json: session });
+    await route.fulfill({ response, json: withCallKeys(session) });
   });
   await page.goto(sessionUrl({ node: "u1", tab: "workflow" }));
   await openDisclosure(page.getByRole("dialog"), "workflow-calls");
@@ -720,7 +721,7 @@ test("tool requester menu actions distinguish same-key calls by owner", async ({
         ],
       }),
     ];
-    await route.fulfill({ response, json: session });
+    await route.fulfill({ response, json: withCallKeys(session) });
   });
   await page.goto(sessionUrl({ node: "u1", tab: "workflow" }));
   await openDisclosure(page.getByRole("dialog"), "workflow-calls");
@@ -747,7 +748,7 @@ test("reveals an initially selected deep call while keeping the requested drawer
     const agent = turn.children.find((child) => child.node_id === "toolu_agent1");
     if (agent === undefined) throw new Error("The browser fixture has no selected sub-agent");
     agent.llm_calls[0].call_id = "selection-deep-call";
-    await route.fulfill({ response, json: session });
+    await route.fulfill({ response, json: withCallKeys(session) });
   });
 
   await page.goto(
@@ -780,7 +781,7 @@ test("marks a removed selected call unavailable without selecting its neighbor",
       turn.end = metric((turn.start.value ?? 0) + 50000);
       fixture.current.root.end = metric((turn.start.value ?? 0) + 50000);
     }
-    await route.fulfill({ json: fixture.current });
+    await route.fulfill({ json: withCallKeys(fixture.current) });
   });
   await page.goto(
     sessionUrl({ node: "u1", tab: "workflow", sel: "call", owner: "u1", call: "id:selection-fixture-19" }),
@@ -810,7 +811,7 @@ test("rejects duplicate exact timestamp fallback without selecting either call",
     turn.llm_calls[0].call_id = null;
     turn.llm_calls[1].call_id = null;
     turn.llm_calls[1].start = metric(turn.llm_calls[0].start.value);
-    await route.fulfill({ response, json: session });
+    await route.fulfill({ response, json: withCallKeys(session) });
   });
   await page.goto(sessionUrl({ node: "u1", tab: "workflow", sel: "call", owner: "u1", call: `time:${baseStart}` }));
   const dialog = page.getByRole("dialog");
@@ -918,7 +919,7 @@ test("wraps a long selected topic on a phone and keeps the caption link reachabl
     const turn = session.root.children.find((child: { node_id: string }) => child.node_id === "u1");
     const agent = turn.children.find((child: { node_id: string }) => child.node_id === "toolu_agent1");
     agent.topic = longTopic;
-    await route.fulfill({ response, json: session });
+    await route.fulfill({ response, json: withCallKeys(session) });
   });
 
   await page.goto(sessionUrl({ sel: "node", entity: "toolu_agent1" }));
@@ -1040,7 +1041,7 @@ test("keeps calls inspectable when a call has no stable identity", async ({ page
     const turn = session.root.children.find((child: { node_id: string }) => child.node_id === "u1");
     turn.llm_calls[1].call_id = null;
     turn.llm_calls[1].start.provenance = "estimated";
-    await route.fulfill({ response, json: session });
+    await route.fulfill({ response, json: withCallKeys(session) });
   });
   await page.goto(sessionUrl({ node: "u1", tab: "workflow" }));
   const dialog = page.getByRole("dialog");
@@ -1169,7 +1170,7 @@ test("does not create context bars for a side request", async ({ page }) => {
     turn.llm_calls[1].tokens.cache_read.value = null;
     turn.llm_calls[1].tokens.cache_write.value = null;
     turn.llm_calls[1].cost = { value: null, unit: null, usd: null, provenance: "n/a" };
-    await route.fulfill({ response, json: session });
+    await route.fulfill({ response, json: withCallKeys(session) });
   });
   await page.goto(sessionUrl({ node: "u1", sel: "call", owner: "u1", call: "id:side-request" }));
   const dialog = page.getByRole("dialog");
@@ -1184,7 +1185,7 @@ test("keeps an untimed native-ID call selectable without inventing a timeline po
     const turn = session.root.children.find((child: { node_id: string }) => child.node_id === "u1");
     turn.llm_calls[1].call_id = "untimed-call";
     turn.llm_calls[1].start.value = null;
-    await route.fulfill({ response, json: session });
+    await route.fulfill({ response, json: withCallKeys(session) });
   });
   await page.goto(sessionUrl({ node: "u1", tab: "workflow", sel: "call", owner: "u1", call: "id:untimed-call" }));
   const dialog = page.getByRole("dialog");
@@ -1200,7 +1201,7 @@ test("labels a selected call outside the inspected node's own-call scope", async
     const turn = session.root.children.find((child: { node_id: string }) => child.node_id === "u1");
     const agent = turn.children.find((child: { node_id: string }) => child.node_id === "toolu_agent1");
     agent.llm_calls[0].call_id = "outside-call";
-    await route.fulfill({ response, json: session });
+    await route.fulfill({ response, json: withCallKeys(session) });
   });
   await page.goto(sessionUrl({ node: "u1", sel: "call", owner: "toolu_agent1", call: "id:outside-call" }));
   const params = new URL(page.url()).searchParams;
@@ -1217,7 +1218,7 @@ test("keeps a call at the timeline end reachable inside the track", async ({ pag
     turn.llm_calls[1].call_id = "boundary-call";
     turn.llm_calls[1].start.value = turn.end.value;
     turn.llm_calls[1].duration.value = null;
-    await route.fulfill({ response, json: session });
+    await route.fulfill({ response, json: withCallKeys(session) });
   });
   await page.goto(sessionUrl({ node: "u1", tab: "workflow" }));
   const workflow = page.getByRole("dialog").getByLabel("Workflow", { exact: true });
@@ -1257,7 +1258,7 @@ test("overlapping calls mark only their aggregate until a labeled detail action 
     turn.llm_calls[1].call_id = "overlap-b";
     turn.llm_calls[1].start.value = 20;
     turn.llm_calls[1].duration.value = 60;
-    await route.fulfill({ response, json: session });
+    await route.fulfill({ response, json: withCallKeys(session) });
   });
   await page.goto(sessionUrl({ node: "u1", tab: "workflow" }));
   const workflow = page.getByRole("dialog").getByLabel("Workflow", { exact: true });
@@ -1306,7 +1307,7 @@ test("zoomed activity chooser excludes offscreen merged nodes and keeps visible 
     turn.end.value = 100;
     session.root.start.value = 0;
     session.root.end.value = 100;
-    await route.fulfill({ response, json: session });
+    await route.fulfill({ response, json: withCallKeys(session) });
   });
   await page.goto(sessionUrl({ tab: "workflow" }));
   const sliders = page.getByRole("slider");
@@ -1342,7 +1343,7 @@ test("merged tool activity marks locally and exposes each explicit candidate act
       tool.end.value = source.end.value;
       turn.children.push(tool);
     }
-    await route.fulfill({ response, json: session });
+    await route.fulfill({ response, json: withCallKeys(session) });
   });
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto(sessionUrl({ node: "u1", tab: "workflow" }));
@@ -1410,7 +1411,7 @@ test("marks an artifact locally and opens an explicit producer candidate", async
       producer.end.value = 45 + index;
       turn.children.push(producer);
     }
-    await route.fulfill({ response, json: session });
+    await route.fulfill({ response, json: withCallKeys(session) });
   });
   await page.goto(sessionUrl({ node: "u1", tab: "content" }));
   const dialog = page.getByRole("dialog");

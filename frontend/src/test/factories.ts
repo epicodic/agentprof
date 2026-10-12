@@ -11,6 +11,7 @@ import type {
   SummaryOut,
   TokensOut,
 } from "../api/types";
+import { withCallKeys } from "./callKeys";
 
 export function metric(value: number | null = null, provenance?: string): MetricOut {
   return { value, provenance: provenance ?? (value === null ? "n/a" : "exact") };
@@ -39,6 +40,7 @@ export function tokens(input: number | null = null, output: number | null = null
 export function makeCall(overrides: Partial<LlmCallOut> = {}): LlmCallOut {
   return {
     call_id: null,
+    call_key: null,
     start: metric(),
     duration: metric(),
     model: null,
@@ -155,6 +157,6 @@ export function makeSession(root: NodeOut, mtime = 0): SessionOut {
     mtime,
     sources: [],
     diagnostics: { malformed_lines: 0, unknown_tool_ids: {}, warnings: [] },
-    root,
+    root: withCallKeys(root),
   };
 }

@@ -186,6 +186,7 @@ class LlmCall:
 
     `in_context` is false for side requests that do not belong to the agent's conversation (e.g. a background
     summary or a small helper model), so they do not count towards the agent's context size.
+    `call_key` is the call's stable identity within its owner, set by the analysis (see `analysis/identity.py`).
     """
 
     start: Metric
@@ -206,6 +207,7 @@ class LlmCall:
     source_order: int | None = None
     source_stream_id: str | None = None
     timing_basis: Literal["request_start", "assistant_message", "usage_report", "turn_start", "unknown"] = "unknown"
+    call_key: str | None = None
 
 
 @dataclass(frozen=True)

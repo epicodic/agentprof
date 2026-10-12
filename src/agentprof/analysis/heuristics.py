@@ -303,9 +303,7 @@ def _check_context_bloat(agent: Node) -> list[Finding]:
                 message=f"mean uncached prompt of {mean_uncached:,.0f} tokens per LLM call",
                 evidence={"mean_uncached_prompt_tokens": mean_uncached},
                 references=[
-                    reference
-                    for call, _ in measured_calls
-                    if (reference := call_reference(agent, call, agent.llm_calls)) is not None
+                    reference for call, _ in measured_calls if (reference := call_reference(agent, call)) is not None
                 ],
             )
         )
@@ -322,7 +320,7 @@ def _check_context_bloat(agent: Node) -> list[Finding]:
                     references=[
                         reference
                         for call, _ in measured_calls
-                        if (reference := call_reference(agent, call, agent.llm_calls)) is not None
+                        if (reference := call_reference(agent, call)) is not None
                     ],
                 )
             )

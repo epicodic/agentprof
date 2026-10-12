@@ -10,14 +10,13 @@ import math
 from dataclasses import dataclass
 from typing import Literal
 
-from agentprof.analysis.finding_references import _timestamp_key, node_reference
+from agentprof.analysis.finding_references import node_reference
 from agentprof.model import (
     ExecutionEvent,
     FindingReference,
     LlmCall,
     Node,
     NodeKind,
-    Provenance,
     TranscriptCoverage,
     TranscriptEntry,
     iter_nodes,
@@ -323,29 +322,13 @@ def _supporting_reference_index(root: Node, entries: list[TranscriptEntry]) -> d
 def _owner_reference_lookup(owner: Node) -> _OwnerReferenceLookup:
     """Precompute exact call, event and direct tool identities for one owner."""
     calls_by_request: dict[tuple[str | None, str], list[LlmCall]] = {}
-    call_id_counts: dict[str, int] = {}
-    timestamp_counts: dict[float, int] = {}
     for call in owner.llm_calls:
         if call.source_request_id is not None:
             calls_by_request.setdefault((call.source_stream_id, call.source_request_id), []).append(call)
-        if call.call_id:
-            call_id_counts[call.call_id] = call_id_counts.get(call.call_id, 0) + 1
-        if call.start.value is not None:
-            timestamp = float(call.start.value)
-            if math.isfinite(timestamp):
-                timestamp_counts[timestamp] = timestamp_counts.get(timestamp, 0) + 1
     call_references: dict[int, FindingReference] = {}
     for index, call in enumerate(owner.llm_calls, start=1):
-        key: str | None = None
-        if call.call_id:
-            if call_id_counts[call.call_id] == 1:
-                key = f"id:{call.call_id}"
-        elif call.start.value is not None and call.start.provenance is Provenance.EXACT:
-            timestamp = float(call.start.value)
-            if math.isfinite(timestamp) and timestamp_counts[timestamp] == 1:
-                key = f"time:{_timestamp_key(timestamp)}"
-        if key is not None:
-            call_references[id(call)] = FindingReference("call", owner.node_id, key, f"LLM call {index}")
+        if call.call_key is not None:
+            call_references[id(call)] = FindingReference("call", owner.node_id, call.call_key, f"LLM call {index}")
     events_by_id: dict[str, list[ExecutionEvent]] = {}
     for event in owner.execution_events:
         if event.event_id:

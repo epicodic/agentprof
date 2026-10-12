@@ -3,6 +3,7 @@
 
 import { expect, type Locator, test } from "@playwright/test";
 import { formatDuration } from "../src/lib/format";
+import { withCallKeys } from "../src/test/callKeys";
 import { makeExecutionEvent, metric } from "../src/test/factories";
 
 const SESSION = "claude-code:11111111-1111-4111-8111-111111111111";
@@ -25,7 +26,7 @@ test("grouped findings retain every message and evidence", async ({ page }) => {
       evidence: { event_id: message },
       estimated_avoidable_cost: { value: null, unit: null, usd: null, provenance: "n/a" },
     }));
-    await route.fulfill({ response, json: session });
+    await route.fulfill({ response, json: withCallKeys(session) });
   });
 
   await page.goto(nodeUrl("u1"));
@@ -197,7 +198,7 @@ test("phone call summaries fit and expanded metrics remain accessible", async ({
         start: metric(call.start.value + 100),
       }),
     ];
-    await route.fulfill({ response, json: session });
+    await route.fulfill({ response, json: withCallKeys(session) });
   });
   await page.goto(nodeUrl("u1"));
   const dialog = page.getByRole("dialog");
@@ -263,7 +264,7 @@ test("phone trailing execution event retains its known since-start metric", asyn
         success: true,
       }),
     ];
-    await route.fulfill({ response, json: session });
+    await route.fulfill({ response, json: withCallKeys(session) });
   });
 
   await page.goto(nodeUrl("u1"));
@@ -295,7 +296,7 @@ test("tool invocation keeps one row and exposes failed result evidence", async (
         success: false,
       }),
     ];
-    await route.fulfill({ response, json: session });
+    await route.fulfill({ response, json: withCallKeys(session) });
   });
 
   await page.goto(nodeUrl("u1"));
@@ -326,7 +327,7 @@ test("phone child topics and artifact paths wrap without hiding navigation", asy
     read.tool.category = "edit";
     read.tool.paths = [longPath];
     read.tool.writes_file = false;
-    await route.fulfill({ response, json: session });
+    await route.fulfill({ response, json: withCallKeys(session) });
   });
 
   await page.goto(nodeUrl("u1"));

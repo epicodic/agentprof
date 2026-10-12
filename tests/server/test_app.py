@@ -7,7 +7,9 @@ import threading
 from collections.abc import AsyncIterator
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
 
 from agentprof.adapters.base import AdapterConfig
 from agentprof.adapters.claude_code.adapter import ClaudeCodeAdapter
@@ -523,3 +525,20 @@ def test_allowed_hosts_also_guard_the_event_stream() -> None:
     app = create_app(_registry(), allowed_hosts={"localhost"})
 
     assert TestClient(app, base_url="http://attacker.example").get("/api/sessions/events").status_code == 400
+
+
+def test_allowed_hosts_close_websockets_from_other_host_names() -> None:
+    client = TestClient(create_app(_registry(), allowed_hosts={"localhost"}), base_url="http://attacker.example")
+
+    with pytest.raises(WebSocketDisconnect) as closed, client.websocket_connect("/ws"):
+        pass
+
+    assert closed.value.code == 1008
+
+
+def test_allowed_hosts_also_guard_the_frontend_files(tmp_path: Path) -> None:
+    (tmp_path / "index.html").write_text("<html></html>")
+    app = create_app(_registry(), static_dir=tmp_path, allowed_hosts={"localhost"})
+
+    assert TestClient(app, base_url="http://localhost").get("/").status_code == 200
+    assert TestClient(app, base_url="http://attacker.example").get("/").status_code == 400

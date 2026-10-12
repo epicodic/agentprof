@@ -10,6 +10,7 @@ from collections import defaultdict
 from itertools import pairwise
 
 from agentprof.analysis.finding_references import call_reference, event_reference, node_reference
+from agentprof.analysis.identity import owned_nodes
 from agentprof.model import (
     CostMetric,
     Finding,
@@ -32,9 +33,9 @@ _CONTEXT_GROWTH_TOKENS = 100_000
 _CONTEXT_GROWTH_FACTOR = 2
 
 
-def _call_ref(owner: Node, call: LlmCall, possible_calls: list[LlmCall]) -> list[FindingReference]:
+def _call_ref(owner: Node, call: LlmCall) -> list[FindingReference]:
     """Return a zero or one element list for an unambiguous call reference."""
-    reference = call_reference(owner, call, possible_calls)
+    reference = call_reference(owner, call)
     return [reference] if reference is not None else []
 
 
@@ -103,16 +104,10 @@ def find_evidence_findings(root: Node) -> list[Finding]:
     owned_calls: dict[str, list[tuple[LlmCall, Node]]] = defaultdict(list)
     owner_compactions: dict[str, list[tuple[Metric, Node]]] = defaultdict(list)
 
-    def gather(node: Node, owner: str) -> None:
-        if node.kind is NodeKind.AGENT:
-            owner = node.agent_uuid or node.node_id
+    for owner, node in owned_nodes(root):
         if node.kind in (NodeKind.TURN, NodeKind.AGENT):
             owned_calls[owner].extend((call, node) for call in node.llm_calls if call.in_context)
             owner_compactions[owner].extend((point, node) for point in node.compactions)
-        for child in node.children:
-            gather(child, owner)
-
-    gather(root, "main")
     for node in nodes:
         if node.kind not in (NodeKind.TURN, NodeKind.AGENT):
             continue
@@ -138,7 +133,7 @@ def find_evidence_findings(root: Node) -> list[Finding]:
                                 "provenance": worst_provenance(call.start.provenance, event.end.provenance).value,
                             },
                             references=[
-                                *_call_ref(node, call, node.llm_calls),
+                                *_call_ref(node, call),
                                 *([node_reference(child)] if child is not None else []),
                             ],
                         )
@@ -156,7 +151,7 @@ def find_evidence_findings(root: Node) -> list[Finding]:
                     call.tokens.cache_write.provenance, call.tokens.cache_read.provenance
                 ).value,
             }
-            call_refs = _call_ref(node, call, node.llm_calls)
+            call_refs = _call_ref(node, call)
             findings.append(
                 Finding(
                     heuristic_id="E1",
@@ -205,8 +200,8 @@ def find_evidence_findings(root: Node) -> list[Finding]:
             before = context_size(earlier.tokens)
             after = context_size(later.tokens)
             refs = [
-                *_call_ref(earlier_owner, earlier, earlier_owner.llm_calls),
-                *_call_ref(later_owner, later, later_owner.llm_calls),
+                *_call_ref(earlier_owner, earlier),
+                *_call_ref(later_owner, later),
             ]
             if (
                 before.value is not None
@@ -306,7 +301,7 @@ def find_evidence_findings(root: Node) -> list[Finding]:
             call_refs = [
                 reference
                 for call, call_owner in adjacent
-                if (reference := call_reference(call_owner, call, call_owner.llm_calls)) is not None
+                if (reference := call_reference(call_owner, call)) is not None
             ]
             unique_refs = list(dict.fromkeys([*call_refs, *event_refs]))
             provenance = compact_point.provenance

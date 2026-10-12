@@ -2,6 +2,7 @@
 // Copyright (c) 2026 epicodic
 
 import { describe, expect, it } from "vitest";
+import { withCallKeys } from "../test/callKeys";
 import { makeCall, makeExecutionEvent, makeNode } from "../test/factories";
 import type { EntityRef } from "./entities";
 import { detailLink, recordedCallTargets } from "./inspectionActions";
@@ -10,7 +11,7 @@ describe("inspection actions", () => {
   it("omits observed consumers and deduplicates recorded requester targets", () => {
     const call = makeCall({ call_id: "call-1", source_request_id: "request-1" });
     const owner = makeNode({ node_id: "turn", kind: "turn", llm_calls: [call] });
-    const root = makeNode({ node_id: "root", kind: "session", children: [owner] });
+    const root = withCallKeys(makeNode({ node_id: "root", kind: "session", children: [owner] }));
     const events = [
       makeExecutionEvent({
         links: [

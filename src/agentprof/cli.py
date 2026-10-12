@@ -24,8 +24,17 @@ from agentprof.server.app import create_app
 
 _DEFAULT_HOST = "127.0.0.1"
 _DEFAULT_PORT = 8765
-_WILDCARD_HOSTS = ("0.0.0.0", "::")
 _LOOPBACK_NAMES = frozenset({"localhost", "127.0.0.1", "::1"})
+
+
+def _is_wildcard(host: str) -> bool:
+    """Whether binding `host` listens on every interface (`0.0.0.0`, `::` and their other spellings)."""
+    if host == "":
+        return True
+    try:
+        return ipaddress.ip_address(host.strip("[]")).is_unspecified
+    except ValueError:
+        return False
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -63,13 +72,13 @@ def is_loopback(host: str) -> bool:
 
 def allowed_hosts(host: str) -> frozenset[str] | None:
     """Host names the server answers to: the loopback names and the bound host; `None` (any) for a wildcard bind."""
-    if host in _WILDCARD_HOSTS:
+    if _is_wildcard(host):
         return None
     return _LOOPBACK_NAMES | {host.strip("[]").lower()}
 
 
 def browser_url(host: str, port: int, session_id: str | None) -> str:
-    shown_host = "localhost" if host in _WILDCARD_HOSTS else host
+    shown_host = "localhost" if _is_wildcard(host) else host
     base = f"http://{shown_host}:{port}/"
     return f"{base}sessions/{quote(session_id, safe='')}" if session_id is not None else base
 

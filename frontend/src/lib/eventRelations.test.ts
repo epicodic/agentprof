@@ -3,6 +3,7 @@
 
 import { describe, expect, it } from "vitest";
 import type { EventCallLinkOut } from "../api/types";
+import { withCallKeys } from "../test/callKeys";
 import { makeCall, makeNode, metric } from "../test/factories";
 import { linkedCallRef } from "./eventRelations";
 
@@ -17,7 +18,7 @@ const link = (owner_id: string | null, source_request_id: string | null): EventC
 describe("linkedCallRef", () => {
   it("resolves one source request through the existing stable call identity", () => {
     const call = makeCall({ call_id: "native", source_request_id: "req" });
-    const root = makeNode({ node_id: "root", llm_calls: [call] });
+    const root = withCallKeys(makeNode({ node_id: "root", llm_calls: [call] }));
     expect(linkedCallRef(root, "s", link("root", "req"))).toEqual({
       kind: "call",
       sessionId: "s",

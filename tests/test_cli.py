@@ -154,6 +154,7 @@ def test_is_loopback() -> None:
 
 def test_browser_url_uses_localhost_for_wildcard_hosts() -> None:
     assert browser_url("0.0.0.0", 8765, None) == "http://localhost:8765/"
+    assert browser_url("::0", 8765, None) == "http://localhost:8765/"
     assert browser_url("127.0.0.1", 1, "a:b") == "http://127.0.0.1:1/sessions/a%3Ab"
 
 
@@ -195,6 +196,10 @@ def test_allowed_hosts_are_the_loopback_names_plus_the_bound_host() -> None:
     assert allowed_hosts("[::1]") == {"localhost", "127.0.0.1", "::1"}
     assert allowed_hosts("0.0.0.0") is None
     assert allowed_hosts("::") is None
+    assert allowed_hosts("") is None
+    assert allowed_hosts("::0") is None
+    assert allowed_hosts("[::]") is None
+    assert allowed_hosts("0:0:0:0:0:0:0:0") is None
 
 
 def test_main_rejects_requests_for_foreign_host_names(copilot_storage: Path) -> None:

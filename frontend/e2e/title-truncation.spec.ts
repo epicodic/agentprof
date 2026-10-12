@@ -2,6 +2,7 @@
 // Copyright (c) 2026 epicodic
 
 import { expect, test } from "@playwright/test";
+import { withCallKeys } from "../src/test/callKeys";
 import { makeSummary } from "../src/test/factories";
 
 const SESSION = "claude-code:11111111-1111-4111-8111-111111111111";
@@ -22,7 +23,7 @@ for (const width of [1280, 390]) {
       const turn = session.root.children.find((node: { node_id: string }) => node.node_id === "u1");
       turn.topic = LONG;
       turn.children.find((node: { kind: string }) => node.kind === "agent").topic = LONG;
-      await route.fulfill({ response, json: session });
+      await route.fulfill({ response, json: withCallKeys(session) });
     });
     await page.route(`**/api/sessions/${encodeURIComponent(SESSION)}/nodes/u1`, async (route) => {
       const response = await route.fetch();

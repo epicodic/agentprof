@@ -2,6 +2,7 @@
 // Copyright (c) 2026 epicodic
 
 import { expect, type Locator, test } from "@playwright/test";
+import { withCallKeys } from "../src/test/callKeys";
 import { assertNoSelectionActionControls } from "./helpers/workflowFixture";
 
 const SESSION = "claude-code:11111111-1111-4111-8111-111111111111";
@@ -79,7 +80,7 @@ test("finding rows announce their mark and keep caption navigation separate", as
         estimated_avoidable_cost: { value: null, unit: null, usd: null, provenance: "n/a" },
       },
     ];
-    await route.fulfill({ response, json: session });
+    await route.fulfill({ response, json: withCallKeys(session) });
   });
   await page.goto(sessionUrl);
   await assertNoSelectionActionControls(page);

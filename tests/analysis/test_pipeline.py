@@ -20,6 +20,7 @@ from agentprof.model import (
     NodeKind,
     Provenance,
     Session,
+    iter_nodes,
 )
 from agentprof.server.schemas import session_out
 
@@ -104,3 +105,14 @@ def test_attach_findings_rejects_a_finding_for_an_unknown_node() -> None:
 
     with pytest.raises(ValueError, match="unknown node 'ghost'"):
         attach_findings(root, [finding])
+
+
+def test_analyze_assigns_call_keys(copilot_storage: Path) -> None:
+    adapter = CopilotVscodeAdapter(AdapterConfig(roots={"copilot-vscode": copilot_storage}))
+    (ref,) = adapter.discover()
+
+    session = analyze(adapter, ref)
+
+    calls = [call for node in iter_nodes(session.root) for call in node.llm_calls]
+    assert calls
+    assert all(call.call_key == f"id:{call.call_id}" for call in calls if call.call_id)

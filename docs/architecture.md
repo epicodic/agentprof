@@ -23,6 +23,7 @@ src/agentprof/
     copilot_vscode/       # VS Code workspaceStorage: session + transcript + debug log
   analysis/
     pipeline.py           # analyze(): the analysis steps in order
+    identity.py           # logical agent owners and stable call keys
     execution.py          # resolve event-to-call links within one logical agent
     rollup.py             # derived metrics, bottom-up
     call_context.py       # same-agent call gaps and intervening events
@@ -102,6 +103,7 @@ Known exceptions, to be removed rather than copied:
 - `context_size` of a call is `input + cache_read + cache_write`.
 - Side requests (`LlmCall.in_context == False`) count for tokens and cost, never for the context.
 - `context_peak` and `compactions` describe a node's own context; on the session node they cover all turns.
+- `sum_metrics` and `extreme_metric` combine metrics and downgrade provenance when values are missing.
 
 **Costs**
 
@@ -161,11 +163,12 @@ Agent specifics:
 Its steps mutate the tree in place, and their order matters:
 
 1. `adapter.analyze` builds the tree.
-2. `execution.resolve_execution_links` resolves event links to a unique call in the same logical agent.
-3. `rollup.roll_up` fills tokens, cost, time spans, tool counts and context peaks bottom-up, keeping the worst provenance.
-4. `call_context.annotate_call_context` sets `gap`, `preceding_events` and `cold_rewrite` on each call.
-5. `heuristics.find_findings` and `evidence_findings.find_evidence_findings` produce findings.
-6. Findings are attached to the nodes they name.
+2. `identity.assign_call_keys` stores each call's stable key on `LlmCall.call_key`.
+3. `execution.resolve_execution_links` resolves event links to a unique call in the same logical agent.
+4. `rollup.roll_up` fills tokens, cost, time spans, tool counts and context peaks bottom-up, keeping the worst provenance.
+5. `call_context.annotate_call_context` sets `gap`, `preceding_events` and `cold_rewrite` on each call.
+6. `heuristics.find_findings` and `evidence_findings.find_evidence_findings` produce findings.
+7. Findings are attached to the nodes they name.
 
 Compactions:
 
@@ -178,7 +181,8 @@ Findings:
 - **Waste heuristics** (`W1`–`W5`, `W7`, `W8`) are small per-node checks in `heuristics._CHECKS`, run on every turn and agent.
 - **Evidence findings** (`E1`–`E7`) work per logical agent: cache rewrites, waits, context growth, idle parents, resumes, long gaps, compactions.
 - Findings cite nodes, calls and events through `finding_references`.
-- A call reference uses a unique native call id, else a unique exact timestamp, else none.
+- `identity.call_keys` is the only definition of a call's key: a unique native id, else a unique exact timestamp, else none.
+- `identity.owned_nodes` is the only definition of a node's logical agent owner.
 - Observed cost and estimated avoidable cost are kept separate.
 - Finding costs must not be summed: several findings may cite the same call.
 
@@ -294,6 +298,7 @@ api/                client, query hooks, SSE, types
 - `client.ts` holds the fetch functions and `queryKeys`; `hooks.ts` wraps them as query hooks.
 - Queries never go stale by themselves (`staleTime: Infinity`); only server events refresh data.
 - The UI uses only the list, session, node and transcript endpoints.
+- The frontend never computes call keys; it reads `call_key` from the API, and tests key synthetic sessions with `src/test/callKeys.ts`.
 
 | Query key | Data |
 |---|---|
@@ -351,7 +356,7 @@ registry event -> Broadcaster -> SSE "updated"/"removed" -> api/events.ts -> que
 ```
 browser GET /api/sessions/{id}
   -> registry.session(id)                     cache hit by mtime, or:
-       pipeline.analyze(adapter, ref)         adapter.analyze -> resolve links -> roll_up -> call context -> findings
+       pipeline.analyze(adapter, ref)         adapter.analyze -> call keys -> resolve links -> roll_up -> call context -> findings
        cache (LRU 20)
   -> session_out(session, mtime) -> SessionOut
 node selected -> GET .../nodes/{node_id} -> prompt, result, arguments

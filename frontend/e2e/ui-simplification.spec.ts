@@ -2,6 +2,7 @@
 // Copyright (c) 2026 epicodic
 
 import { expect, type Locator, test } from "@playwright/test";
+import { withCallKeys } from "../src/test/callKeys";
 
 const SESSION = "claude-code:11111111-1111-4111-8111-111111111111";
 
@@ -247,7 +248,7 @@ test("artifact rows mark locally and explicit details open the producer", async 
     tool.tool.category = "edit";
     tool.tool.paths = ["marked-artifact.py"];
     tool.tool.writes_file = false;
-    await route.fulfill({ response, json: session });
+    await route.fulfill({ response, json: withCallKeys(session) });
   });
 
   await page.goto(`/sessions/${encodeURIComponent(SESSION)}?node=u1&tab=content`);
@@ -286,7 +287,7 @@ test("finding rows mark locally and explicit details reveal their agent", async 
         estimated_avoidable_cost: { value: null, unit: null, usd: null, provenance: "n/a" },
       },
     ];
-    await route.fulfill({ response, json: session });
+    await route.fulfill({ response, json: withCallKeys(session) });
   });
 
   await page.goto(`/sessions/${encodeURIComponent(SESSION)}`);
@@ -325,7 +326,7 @@ test("finding groups and evidence expand only through their disclosure triangles
         estimated_avoidable_cost: { value: null, unit: null, usd: null, provenance: "n/a" },
       },
     ];
-    await route.fulfill({ response, json: session });
+    await route.fulfill({ response, json: withCallKeys(session) });
   });
 
   await page.goto(`/sessions/${encodeURIComponent(SESSION)}?node=u1`);

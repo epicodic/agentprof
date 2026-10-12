@@ -5,6 +5,7 @@ import { MantineProvider } from "@mantine/core";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { expect, test } from "vitest";
+import { withCallKeys } from "../test/callKeys";
 import { makeCall, makeNode, metric } from "../test/factories";
 import { ActivityTrack } from "./ActivityTrack";
 import type { SessionInteraction } from "./SessionInteraction";
@@ -33,7 +34,7 @@ test("renders native call hit targets with exact selection by owner and index", 
   const secondCall = makeCall({ call_id: "second", start: metric(50), duration: metric(10) });
   const first = makeNode({ node_id: "turn-a", kind: "turn", llm_calls: [firstCall] });
   const second = makeNode({ node_id: "turn-b", kind: "turn", llm_calls: [secondCall] });
-  const node = makeNode({ node_id: "session", kind: "session", children: [first, second] });
+  const node = withCallKeys(makeNode({ node_id: "session", kind: "session", children: [first, second] }));
   const interaction: SessionInteraction = {
     sessionId: "session-id",
     root: node,
@@ -85,7 +86,7 @@ test("renders native call hit targets with exact selection by owner and index", 
 
 test("labels a singleton activity call as a timeline control", () => {
   const call = makeCall({ call_id: "single", start: metric(50), duration: metric(10) });
-  const turn = makeNode({ node_id: "turn-a", kind: "turn", llm_calls: [call] });
+  const turn = withCallKeys(makeNode({ node_id: "turn-a", kind: "turn", llm_calls: [call] }));
   const interaction: SessionInteraction = {
     sessionId: "session-id",
     root: turn,

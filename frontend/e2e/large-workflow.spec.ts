@@ -3,6 +3,7 @@
 
 import { expect, type Locator, test } from "@playwright/test";
 import type { NodeOut, SessionOut } from "../src/api/types";
+import { withCallKeys } from "../src/test/callKeys";
 import { cost, makeCall, makeNode, makeSession, makeTool, metric, tokens } from "../src/test/factories";
 
 const SESSION = "synthetic:large-public-workflow";
@@ -203,7 +204,7 @@ test("large public synthetic workflow stays inspectable on phone and desktop", a
   expect(allTools).toBeGreaterThanOrEqual(60);
 
   await page.route(`**/api/sessions/${encodeURIComponent(SESSION)}`, (route) =>
-    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(session) }),
+    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(withCallKeys(session)) }),
   );
 
   await page.setViewportSize({ width: 1440, height: 900 });

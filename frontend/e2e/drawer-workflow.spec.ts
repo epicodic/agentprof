@@ -2,6 +2,7 @@
 // Copyright (c) 2026 epicodic
 
 import { expect, test } from "@playwright/test";
+import { withCallKeys } from "../src/test/callKeys";
 
 const SESSION = "claude-code:11111111-1111-4111-8111-111111111111";
 
@@ -93,7 +94,7 @@ for (const width of [1280, 390]) {
 test("legacy Calls deep links reveal calls in Workflow", async ({ page }) => {
   const session = await (await page.request.get(`/api/sessions/${encodeURIComponent(SESSION)}`)).json();
   const call = session.root.children.find((node: { node_id: string }) => node.node_id === "u1").llm_calls[0];
-  const key = call.call_id === null ? `time:${call.start.value}` : `id:${call.call_id}`;
+  const key = call.call_key;
   await page.goto(
     `/sessions/${encodeURIComponent(SESSION)}?node=u1&tab=calls&sel=call&owner=u1&call=${encodeURIComponent(key)}`,
   );
@@ -114,7 +115,7 @@ test("round-value axes keep small dollar amounts distinct and show readable toke
     call.tokens.cache_write.value = 0;
     call.in_context = true;
     turn.llm_calls = [call];
-    await route.fulfill({ response, json: session });
+    await route.fulfill({ response, json: withCallKeys(session) });
   });
   await page.goto(`/sessions/${encodeURIComponent(SESSION)}?node=u1&tab=workflow`);
   const surface = page.getByTestId("workflow-charts");
@@ -154,7 +155,7 @@ test("charts share recorded call timestamps when node timing is unavailable", as
     turn.start = { value: null, provenance: "n/a" };
     turn.end = { value: null, provenance: "n/a" };
     turn.llm_calls[0].duration = { value: null, provenance: "n/a" };
-    await route.fulfill({ response, json: session });
+    await route.fulfill({ response, json: withCallKeys(session) });
   });
   await page.goto(`/sessions/${encodeURIComponent(SESSION)}?node=u1&tab=workflow`);
   const surface = page.getByTestId("workflow-charts");
