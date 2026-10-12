@@ -9,7 +9,7 @@ import re
 from collections.abc import Callable
 from typing import NamedTuple
 
-from agentprof.analysis.finding_references import call_reference, node_reference
+from agentprof.analysis.finding_references import call_references, node_reference
 from agentprof.model import Finding, LlmCall, Node, NodeKind, ToolCategory, iter_nodes
 
 _MIN_REPEATED_READS = 3
@@ -195,9 +195,7 @@ def _check_cost_outliers(parent: Node) -> list[Finding]:
 
 def _check_reacquired_context(parent: Node) -> list[Finding]:
     """W2: a child agent reads a file its parent read within the preceding 10 minutes."""
-    parent_read_ends = [
-        (read.path, read.node.end.number()) for read in _reads(parent) if read.node.end.value is not None
-    ]
+    parent_reads = [read for read in _reads(parent) if read.node.end.value is not None]
     findings: list[Finding] = []
     for child_agent in parent.children:
         if child_agent.kind is not NodeKind.AGENT:
@@ -207,27 +205,24 @@ def _check_reacquired_context(parent: Node) -> list[Finding]:
             if read.path in flagged or read.node.start.value is None:
                 continue
             start = read.node.start.number()
-            if any(path == read.path and 0 <= start - end <= _REACQUIRE_WINDOW_MS for path, end in parent_read_ends):
-                flagged.add(read.path)
-                findings.append(
-                    Finding(
-                        heuristic_id="W2",
-                        node_id=child_agent.node_id,
-                        severity="low",
-                        message=f"{read.path!r} was already read by the parent agent",
-                        evidence={"path": read.path},
-                        references=[
-                            node_reference(read.node),
-                            *[
-                                node_reference(parent_read.node)
-                                for parent_read in _reads(parent)
-                                if parent_read.path == read.path
-                                and parent_read.node.end.value is not None
-                                and 0 <= start - parent_read.node.end.number() <= _REACQUIRE_WINDOW_MS
-                            ],
-                        ],
-                    )
+            earlier_reads = [
+                parent_read
+                for parent_read in parent_reads
+                if parent_read.path == read.path and 0 <= start - parent_read.node.end.number() <= _REACQUIRE_WINDOW_MS
+            ]
+            if not earlier_reads:
+                continue
+            flagged.add(read.path)
+            findings.append(
+                Finding(
+                    heuristic_id="W2",
+                    node_id=child_agent.node_id,
+                    severity="low",
+                    message=f"{read.path!r} was already read by the parent agent",
+                    evidence={"path": read.path},
+                    references=[node_reference(read.node), *(node_reference(other.node) for other in earlier_reads)],
                 )
+            )
     return findings
 
 
@@ -291,6 +286,8 @@ def _check_context_bloat(agent: Node) -> list[Finding]:
     measured = [pair for _, pair in measured_calls]
     if not measured:
         return []
+    references = call_references(agent)
+    measured_references = [references[id(call)] for call, _ in measured_calls if id(call) in references]
     findings: list[Finding] = []
     total_prompt = sum(prompt for prompt, _ in measured)
     mean_uncached = sum(prompt - cached for prompt, cached in measured) / len(measured)
@@ -302,9 +299,7 @@ def _check_context_bloat(agent: Node) -> list[Finding]:
                 severity="medium",
                 message=f"mean uncached prompt of {mean_uncached:,.0f} tokens per LLM call",
                 evidence={"mean_uncached_prompt_tokens": mean_uncached},
-                references=[
-                    reference for call, _ in measured_calls if (reference := call_reference(agent, call)) is not None
-                ],
+                references=measured_references,
             )
         )
     if len(measured) >= _MIN_CALLS_FOR_CACHE_RATIO and total_prompt > 0:
@@ -317,11 +312,7 @@ def _check_context_bloat(agent: Node) -> list[Finding]:
                     severity="low",
                     message=f"cache hit ratio {ratio:.0%}",
                     evidence={"cache_hit_ratio": ratio},
-                    references=[
-                        reference
-                        for call, _ in measured_calls
-                        if (reference := call_reference(agent, call)) is not None
-                    ],
+                    references=measured_references,
                 )
             )
     return findings

@@ -1,3 +1,4 @@
+from agentprof.analysis.call_context import annotate_call_context
 from agentprof.analysis.evidence_findings import find_evidence_findings
 from agentprof.analysis.identity import assign_call_keys
 from agentprof.model import (
@@ -152,6 +153,7 @@ def test_long_gap_finding_cites_calls_and_does_not_claim_idle() -> None:
     root = Node(node_id="root", kind=NodeKind.SESSION, topic="s", children=[turn])
 
     assign_call_keys(root)
+    annotate_call_context(root)
     findings = find_evidence_findings(root)
     gap = next(finding for finding in findings if finding.heuristic_id == "E6")
 
@@ -160,6 +162,31 @@ def test_long_gap_finding_cites_calls_and_does_not_claim_idle() -> None:
     assert gap.evidence["basis"] == "previous_end"
     assert "idle" not in gap.message.casefold()
     assert {reference.key for reference in gap.references} == {"id:first", "id:second"}
+
+
+def test_long_gap_reads_the_annotated_gap_and_preceding_events() -> None:
+    tool = CallEvent("tool", "bash", Metric.exact(1_000), Metric.exact(2_000), Metric.exact(1_000))
+    earlier = LlmCall(start=Metric.exact(0), call_id="first")
+    later = LlmCall(
+        start=Metric.exact(10),
+        call_id="second",
+        gap=Metric.estimated(400_000),
+        gap_basis="previous_start",
+        preceding_events=[tool],
+    )
+    bash = Node(node_id="bash", kind=NodeKind.TOOL, topic="bash")
+    turn = Node(node_id="turn", kind=NodeKind.TURN, topic="t", llm_calls=[earlier, later], children=[bash])
+    root = Node(node_id="root", kind=NodeKind.SESSION, topic="s", children=[turn])
+
+    gap = next(finding for finding in find_evidence_findings(root) if finding.heuristic_id == "E6")
+
+    assert gap.evidence["gap_ms"] == 400_000
+    assert gap.evidence["basis"] == "previous_start"
+    assert gap.evidence["provenance"] == "estimated"
+    events = gap.evidence["intervening_events"]
+    assert isinstance(events, list)
+    assert [event["event_id"] for event in events] == ["bash"]
+    assert "bash" in {reference.key for reference in gap.references}
 
 
 def test_cache_rewrite_observed_cost_requires_both_cache_write_parts() -> None:

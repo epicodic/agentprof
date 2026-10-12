@@ -7,11 +7,14 @@ have been avoided.
 """
 
 from collections import defaultdict
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from itertools import pairwise
 
-from agentprof.analysis.finding_references import call_reference, event_reference, node_reference
+from agentprof.analysis.finding_references import call_references, event_reference, node_reference
 from agentprof.analysis.identity import owned_nodes
 from agentprof.model import (
+    CallEvent,
     CostMetric,
     Finding,
     FindingReference,
@@ -26,6 +29,8 @@ from agentprof.model import (
     worst_provenance,
 )
 
+_AGENT_KINDS = (NodeKind.TURN, NodeKind.AGENT)
+
 _BLOCKING_WAIT_MS = 5 * 60 * 1000
 _PARENT_IDLE_MS = 5 * 60 * 1000
 _LONG_GAP_MS = 5 * 60 * 1000
@@ -33,10 +38,48 @@ _CONTEXT_GROWTH_TOKENS = 100_000
 _CONTEXT_GROWTH_FACTOR = 2
 
 
-def _call_ref(owner: Node, call: LlmCall) -> list[FindingReference]:
-    """Return a zero or one element list for an unambiguous call reference."""
-    reference = call_reference(owner, call)
-    return [reference] if reference is not None else []
+@dataclass
+class _Context:
+    """What the evidence checks read, built once per tree."""
+
+    nodes: list[Node]
+    by_id: dict[str, Node]
+    agent_nodes: list[Node]
+    """Turn and agent nodes, depth first."""
+    calls: dict[str, list[tuple[LlmCall, Node]]]
+    """Per logical agent: its in-context calls with a start, by start, each with the node that holds it."""
+    compactions: dict[str, list[tuple[Metric, Node]]]
+    """Per logical agent: its compaction points, each with the node that recorded it."""
+    _references: dict[int, dict[int, FindingReference]] = field(init=False, default_factory=dict)
+
+    def call_ref(self, owner: Node, call: LlmCall) -> list[FindingReference]:
+        """A zero or one element list with the reference of `call`, one of `owner`'s calls."""
+        references = self._references.get(id(owner))
+        if references is None:
+            references = self._references[id(owner)] = call_references(owner)
+        reference = references.get(id(call))
+        return [reference] if reference is not None else []
+
+
+def _context(root: Node) -> _Context:
+    calls: dict[str, list[tuple[LlmCall, Node]]] = defaultdict(list)
+    compactions: dict[str, list[tuple[Metric, Node]]] = defaultdict(list)
+    for owner, node in owned_nodes(root):
+        if node.kind in _AGENT_KINDS:
+            calls[owner].extend(
+                (call, node) for call in node.llm_calls if call.in_context and call.start.value is not None
+            )
+            compactions[owner].extend((point, node) for point in node.compactions)
+    for owner_calls in calls.values():
+        owner_calls.sort(key=lambda item: item[0].start.number())
+    nodes = list(iter_nodes(root))
+    return _Context(
+        nodes=nodes,
+        by_id={node.node_id: node for node in nodes},
+        agent_nodes=[node for node in nodes if node.kind in _AGENT_KINDS],
+        calls=dict(calls),
+        compactions=dict(compactions),
+    )
 
 
 def _observed_cache_write_cost(call: LlmCall) -> CostMetric:
@@ -48,19 +91,152 @@ def _observed_cache_write_cost(call: LlmCall) -> CostMetric:
     return sum_costs([five_minute, one_hour])
 
 
-def _resume_tool_findings(nodes: list[Node]) -> list[Finding]:
-    """Return the compatible resume-tool finding, using neutral wording."""
+def _is_blocking_wait(context: _Context, event: CallEvent) -> bool:
+    """A timed tool call that waited on the user for at least five minutes."""
+    tool_node = context.by_id.get(event.event_id)
+    return (
+        event.kind == "tool"
+        and tool_node is not None
+        and tool_node.tool is not None
+        and tool_node.tool.blocks_on_user
+        and event.duration.value is not None
+        and event.duration.number() >= _BLOCKING_WAIT_MS
+    )
+
+
+def _cache_rewrite_findings(context: _Context, node: Node, call: LlmCall) -> list[Finding]:
+    evidence: dict[str, object] = {
+        "call_id": call.call_id,
+        "call_start_ms": call.start.value,
+        "cache_write_tokens": call.tokens.cache_write.value,
+        "cache_read_tokens": call.tokens.cache_read.value,
+        "gap_ms": call.gap.value,
+        "cold_reason": call.cold_reason,
+        "provenance": worst_provenance(call.tokens.cache_write.provenance, call.tokens.cache_read.provenance).value,
+    }
+    call_refs = context.call_ref(node, call)
+    findings = [
+        Finding(
+            heuristic_id="E1",
+            node_id=node.node_id,
+            severity="medium",
+            message="Large cache rewrite with little cache reuse",
+            evidence=evidence,
+            references=call_refs,
+            observed_cost=_observed_cache_write_cost(call),
+        )
+    ]
+    wait = next((event for event in call.preceding_events if _is_blocking_wait(context, event)), None)
+    if wait is not None:
+        findings.append(
+            Finding(
+                heuristic_id="E2",
+                node_id=node.node_id,
+                severity="medium",
+                message="Blocking user wait preceded a large cache rewrite",
+                evidence={
+                    **evidence,
+                    "tool_node_id": wait.event_id,
+                    "wait_ms": wait.duration.value,
+                    "wait_provenance": wait.duration.provenance.value,
+                },
+                references=[*call_refs, node_reference(context.by_id[wait.event_id])],
+                observed_cost=_observed_cache_write_cost(call),
+            )
+        )
+    return findings
+
+
+def _check_cache_rewrites(context: _Context) -> list[Finding]:
+    """E1: a large cache rewrite with little reuse; E2: the same rewrite after a long blocking user wait."""
+    return [
+        finding
+        for node in context.agent_nodes
+        for call in node.llm_calls
+        if call.cold_rewrite
+        for finding in _cache_rewrite_findings(context, node, call)
+    ]
+
+
+def _check_context_growth(context: _Context) -> list[Finding]:
+    """E3: a logical agent's context at least doubled, to 100k tokens or more, between consecutive calls."""
+    findings: list[Finding] = []
+    for calls in context.calls.values():
+        for (earlier, earlier_node), (later, later_node) in pairwise(calls):
+            before = context_size(earlier.tokens)
+            after = context_size(later.tokens)
+            if (
+                before.value is None
+                or after.value is None
+                or after.number() < _CONTEXT_GROWTH_TOKENS
+                or after.number() < before.number() * _CONTEXT_GROWTH_FACTOR
+            ):
+                continue
+            findings.append(
+                Finding(
+                    heuristic_id="E3",
+                    node_id=later_node.node_id,
+                    severity="low",
+                    message="Model context grew sharply between calls",
+                    evidence={
+                        "earlier_call_id": earlier.call_id,
+                        "later_call_id": later.call_id,
+                        "earlier_context_tokens": before.value,
+                        "later_context_tokens": after.value,
+                        "provenance": worst_provenance(before.provenance, after.provenance).value,
+                    },
+                    references=[*context.call_ref(earlier_node, earlier), *context.call_ref(later_node, later)],
+                )
+            )
+    return findings
+
+
+def _check_idle_parent(context: _Context) -> list[Finding]:
+    """E4: a call that started at least five minutes after a child agent completed."""
+    findings: list[Finding] = []
+    for node in context.agent_nodes:
+        for call in node.llm_calls:
+            for event in call.preceding_events:
+                if event.kind != "child_completion" or event.end.value is None or call.start.value is None:
+                    continue
+                idle_ms = call.start.number() - event.end.number()
+                if idle_ms < _PARENT_IDLE_MS:
+                    continue
+                child = context.by_id.get(event.event_id)
+                findings.append(
+                    Finding(
+                        heuristic_id="E4",
+                        node_id=node.node_id,
+                        severity="low",
+                        message="Parent agent was idle after a child completed",
+                        evidence={
+                            "call_id": call.call_id,
+                            "child_node_id": event.event_id,
+                            "idle_ms": idle_ms,
+                            "provenance": worst_provenance(call.start.provenance, event.end.provenance).value,
+                        },
+                        references=[
+                            *context.call_ref(node, call),
+                            *([node_reference(child)] if child is not None else []),
+                        ],
+                    )
+                )
+    return findings
+
+
+def _check_resumes(context: _Context) -> list[Finding]:
+    """E5: a recorded agent resume, from a resume tool call or a resume event, using neutral wording."""
     findings: list[Finding] = []
     resumed_agent_times = {
         (node.tool.linked_agent_node_id, node.start.value)
-        for node in nodes
+        for node in context.nodes
         if node.kind is NodeKind.TOOL
         and node.tool is not None
         and node.tool.is_resume
         and node.tool.linked_agent_node_id is not None
         and node.start.value is not None
     }
-    for node in nodes:
+    for node in context.nodes:
         if node.kind is NodeKind.TOOL and node.tool is not None and node.tool.is_resume:
             findings.append(
                 Finding(
@@ -96,245 +272,114 @@ def _resume_tool_findings(nodes: list[Node]) -> list[Finding]:
     return findings
 
 
-def find_evidence_findings(root: Node) -> list[Finding]:
-    """Return evidence-backed findings over the neutral call tree."""
-    nodes = list(iter_nodes(root))
-    by_id = {node.node_id: node for node in nodes}
+def _check_long_gaps(context: _Context) -> list[Finding]:
+    """E6: at least five minutes between consecutive calls of one logical agent, as `annotate_call_context` measured."""
     findings: list[Finding] = []
-    owned_calls: dict[str, list[tuple[LlmCall, Node]]] = defaultdict(list)
-    owner_compactions: dict[str, list[tuple[Metric, Node]]] = defaultdict(list)
-
-    for owner, node in owned_nodes(root):
-        if node.kind in (NodeKind.TURN, NodeKind.AGENT):
-            owned_calls[owner].extend((call, node) for call in node.llm_calls if call.in_context)
-            owner_compactions[owner].extend((point, node) for point in node.compactions)
-    for node in nodes:
-        if node.kind not in (NodeKind.TURN, NodeKind.AGENT):
-            continue
-        for call in node.llm_calls:
-            for event in call.preceding_events:
-                if (
-                    event.kind == "child_completion"
-                    and event.end.value is not None
-                    and call.start.value is not None
-                    and call.start.number() - event.end.number() >= _PARENT_IDLE_MS
-                ):
-                    child = by_id.get(event.event_id)
-                    findings.append(
-                        Finding(
-                            heuristic_id="E4",
-                            node_id=node.node_id,
-                            severity="low",
-                            message="Parent agent was idle after a child completed",
-                            evidence={
-                                "call_id": call.call_id,
-                                "child_node_id": event.event_id,
-                                "idle_ms": call.start.number() - event.end.number(),
-                                "provenance": worst_provenance(call.start.provenance, event.end.provenance).value,
-                            },
-                            references=[
-                                *_call_ref(node, call),
-                                *([node_reference(child)] if child is not None else []),
-                            ],
-                        )
-                    )
-            if not call.cold_rewrite:
+    for calls in context.calls.values():
+        for (earlier, earlier_node), (later, later_node) in pairwise(calls):
+            if later.gap.value is None or later.gap.number() < _LONG_GAP_MS:
                 continue
-            evidence: dict[str, object] = {
-                "call_id": call.call_id,
-                "call_start_ms": call.start.value,
-                "cache_write_tokens": call.tokens.cache_write.value,
-                "cache_read_tokens": call.tokens.cache_read.value,
-                "gap_ms": call.gap.value,
-                "cold_reason": call.cold_reason,
-                "provenance": worst_provenance(
-                    call.tokens.cache_write.provenance, call.tokens.cache_read.provenance
-                ).value,
-            }
-            call_refs = _call_ref(node, call)
             findings.append(
                 Finding(
-                    heuristic_id="E1",
-                    node_id=node.node_id,
-                    severity="medium",
-                    message="Large cache rewrite with little cache reuse",
-                    evidence=evidence,
-                    references=call_refs,
-                    observed_cost=_observed_cache_write_cost(call),
-                )
-            )
-            for event in call.preceding_events:
-                tool_node = by_id.get(event.event_id)
-                if (
-                    event.kind == "tool"
-                    and tool_node is not None
-                    and tool_node.tool is not None
-                    and tool_node.tool.blocks_on_user
-                    and event.duration.value is not None
-                    and event.duration.number() >= _BLOCKING_WAIT_MS
-                ):
-                    findings.append(
-                        Finding(
-                            heuristic_id="E2",
-                            node_id=node.node_id,
-                            severity="medium",
-                            message="Blocking user wait preceded a large cache rewrite",
-                            evidence={
-                                **evidence,
-                                "tool_node_id": event.event_id,
-                                "wait_ms": event.duration.value,
-                                "wait_provenance": event.duration.provenance.value,
-                            },
-                            references=[*call_refs, node_reference(tool_node)],
-                            observed_cost=_observed_cache_write_cost(call),
-                        )
-                    )
-                    break
-    findings.extend(_resume_tool_findings(nodes))
-    for owner_key, calls in owned_calls.items():
-        ordered = sorted(
-            ((call, node) for call, node in calls if call.start.value is not None),
-            key=lambda item: item[0].start.number(),
-        )
-        for (earlier, earlier_owner), (later, later_owner) in pairwise(ordered):
-            before = context_size(earlier.tokens)
-            after = context_size(later.tokens)
-            refs = [
-                *_call_ref(earlier_owner, earlier),
-                *_call_ref(later_owner, later),
-            ]
-            if (
-                before.value is not None
-                and after.value is not None
-                and after.number() >= _CONTEXT_GROWTH_TOKENS
-                and after.number() >= before.number() * _CONTEXT_GROWTH_FACTOR
-            ):
-                findings.append(
-                    Finding(
-                        heuristic_id="E3",
-                        node_id=later_owner.node_id,
-                        severity="low",
-                        message="Model context grew sharply between calls",
-                        evidence={
-                            "earlier_call_id": earlier.call_id,
-                            "later_call_id": later.call_id,
-                            "earlier_context_tokens": before.value,
-                            "later_context_tokens": after.value,
-                            "provenance": worst_provenance(before.provenance, after.provenance).value,
-                        },
-                        references=refs,
-                    )
-                )
-            baseline = earlier.start.number()
-            basis = "previous_start"
-            gap_provenance = worst_provenance(later.start.provenance, earlier.start.provenance)
-            if earlier.duration.value is not None:
-                baseline += earlier.duration.number()
-                basis = "previous_end"
-                gap_provenance = worst_provenance(gap_provenance, earlier.duration.provenance)
-            else:
-                gap_provenance = worst_provenance(gap_provenance, Provenance.ESTIMATED)
-            gap_ms = later.start.number() - baseline
-            if gap_ms >= _LONG_GAP_MS:
-                intervening_events = [
-                    {
-                        "kind": event.kind,
-                        "event_id": event.event_id,
-                        "start_ms": event.start.value,
-                        "end_ms": event.end.value,
-                        "duration_ms": event.duration.value,
-                    }
-                    for event in later.preceding_events
-                    if event.start.value is not None
-                    and event.end.value is not None
-                    and baseline <= event.start.number()
-                    and event.end.number() <= later.start.number()
-                ]
-                findings.append(
-                    Finding(
-                        heuristic_id="E6",
-                        node_id=later_owner.node_id,
-                        severity="low",
-                        message="Long interval between model calls",
-                        evidence={
-                            "earlier_call_id": earlier.call_id,
-                            "later_call_id": later.call_id,
-                            "gap_ms": gap_ms,
-                            "basis": basis,
-                            "provenance": gap_provenance.value,
-                            "intervening_events": intervening_events,
-                        },
-                        references=[
-                            *refs,
-                            *[
-                                node_reference(by_id[event.event_id])
-                                for event in later.preceding_events
-                                if event.event_id in by_id
-                                and event.start.value is not None
-                                and event.end.value is not None
-                                and baseline <= event.start.number()
-                                and event.end.number() <= later.start.number()
-                            ],
-                        ],
-                    )
-                )
-        for compact_point, compact_owner in owner_compactions[owner_key]:
-            before_calls = [
-                item
-                for item in ordered
-                if compact_point.value is not None and item[0].start.number() < compact_point.number()
-            ]
-            after_calls = [
-                item
-                for item in ordered
-                if compact_point.value is not None and item[0].start.number() >= compact_point.number()
-            ]
-            adjacent = ([before_calls[-1]] if before_calls else []) + ([after_calls[0]] if after_calls else [])
-            event_refs = [
-                reference
-                for event in compact_owner.execution_events
-                if event.kind == "compaction"
-                and compact_point.value is not None
-                and event.start.value == compact_point.value
-                and (reference := event_reference(compact_owner, event)) is not None
-            ]
-            call_refs = [
-                reference
-                for call, call_owner in adjacent
-                if (reference := call_reference(call_owner, call)) is not None
-            ]
-            unique_refs = list(dict.fromkeys([*call_refs, *event_refs]))
-            provenance = compact_point.provenance
-            if adjacent:
-                provenance = worst_provenance(provenance, *(call.start.provenance for call, _ in adjacent))
-            if before_calls and after_calls:
-                message = (
-                    "Context compaction recorded between model calls"
-                    if provenance is Provenance.EXACT
-                    else "Context compaction evidence falls between model calls"
-                )
-            else:
-                message = (
-                    "Context compaction recorded"
-                    if compact_point.provenance is Provenance.EXACT
-                    else "Context compaction estimate recorded"
-                )
-            findings.append(
-                Finding(
-                    heuristic_id="E7",
-                    node_id=compact_owner.node_id,
+                    heuristic_id="E6",
+                    node_id=later_node.node_id,
                     severity="low",
-                    message=message,
+                    message="Long interval between model calls",
                     evidence={
-                        "compaction_ms": compact_point.value,
-                        "basis": "recorded_compaction"
-                        if compact_point.provenance is Provenance.EXACT
-                        else "estimated_compaction",
-                        "provenance": provenance.value,
-                        "earlier_call_id": before_calls[-1][0].call_id if before_calls else None,
-                        "later_call_id": after_calls[0][0].call_id if after_calls else None,
+                        "earlier_call_id": earlier.call_id,
+                        "later_call_id": later.call_id,
+                        "gap_ms": later.gap.value,
+                        "basis": later.gap_basis,
+                        "provenance": later.gap.provenance.value,
+                        "intervening_events": [_event_evidence(event) for event in later.preceding_events],
                     },
-                    references=unique_refs,
+                    references=[
+                        *context.call_ref(earlier_node, earlier),
+                        *context.call_ref(later_node, later),
+                        *(
+                            node_reference(context.by_id[event.event_id])
+                            for event in later.preceding_events
+                            if event.event_id in context.by_id
+                        ),
+                    ],
                 )
             )
     return findings
+
+
+def _event_evidence(event: CallEvent) -> dict[str, object]:
+    return {
+        "kind": event.kind,
+        "event_id": event.event_id,
+        "start_ms": event.start.value,
+        "end_ms": event.end.value,
+        "duration_ms": event.duration.value,
+    }
+
+
+def _compaction_finding(context: _Context, point: Metric, node: Node, calls: list[tuple[LlmCall, Node]]) -> Finding:
+    """One E7 finding for a compaction point, citing the calls on either side of it and its event."""
+    before = [item for item in calls if point.value is not None and item[0].start.number() < point.number()]
+    after = [item for item in calls if point.value is not None and item[0].start.number() >= point.number()]
+    adjacent = before[-1:] + after[:1]
+    event_refs = [
+        reference
+        for event in node.execution_events
+        if event.kind == "compaction"
+        and point.value is not None
+        and event.start.value == point.value
+        and (reference := event_reference(node, event)) is not None
+    ]
+    call_refs = [reference for call, call_node in adjacent for reference in context.call_ref(call_node, call)]
+    provenance = worst_provenance(point.provenance, *(call.start.provenance for call, _ in adjacent))
+    if before and after:
+        message = (
+            "Context compaction recorded between model calls"
+            if provenance is Provenance.EXACT
+            else "Context compaction evidence falls between model calls"
+        )
+    else:
+        message = (
+            "Context compaction recorded"
+            if point.provenance is Provenance.EXACT
+            else "Context compaction estimate recorded"
+        )
+    return Finding(
+        heuristic_id="E7",
+        node_id=node.node_id,
+        severity="low",
+        message=message,
+        evidence={
+            "compaction_ms": point.value,
+            "basis": "recorded_compaction" if point.provenance is Provenance.EXACT else "estimated_compaction",
+            "provenance": provenance.value,
+            "earlier_call_id": before[-1][0].call_id if before else None,
+            "later_call_id": after[0][0].call_id if after else None,
+        },
+        references=list(dict.fromkeys([*call_refs, *event_refs])),
+    )
+
+
+def _check_compactions(context: _Context) -> list[Finding]:
+    """E7: a recorded or estimated context compaction of a logical agent."""
+    return [
+        _compaction_finding(context, point, node, context.calls[owner])
+        for owner, points in context.compactions.items()
+        for point, node in points
+    ]
+
+
+_CHECKS: tuple[Callable[[_Context], list[Finding]], ...] = (
+    _check_cache_rewrites,
+    _check_context_growth,
+    _check_idle_parent,
+    _check_resumes,
+    _check_long_gaps,
+    _check_compactions,
+)
+
+
+def find_evidence_findings(root: Node) -> list[Finding]:
+    """Return evidence-backed findings over the neutral call tree; run after `call_context.annotate_call_context`."""
+    context = _context(root)
+    return [finding for check in _CHECKS for finding in check(context)]
