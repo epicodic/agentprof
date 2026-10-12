@@ -38,3 +38,31 @@ describe("isStale", () => {
     expect(isStale(undefined, makeSummary({ id: "claude-code:s", mtime: 11 }))).toBe(false);
   });
 });
+
+describe("transcript event invalidation", () => {
+  it("invalidates session transcript caches on updates even when the session mtime is current", async () => {
+    const { QueryClient } = await import("@tanstack/react-query");
+    const { invalidateTranscriptCaches } = await import("./events");
+    const client = new QueryClient();
+    const key = ["transcript", "s", "page", {}] as const;
+    client.setQueryData(key, { entries: ["retained"] });
+    await invalidateTranscriptCaches(client, "s");
+    expect(client.getQueryState(key)?.isInvalidated).toBe(true);
+    expect(client.getQueryData(key)).toEqual({ entries: ["retained"] });
+  });
+
+  it("invalidates all loaded transcript sessions on reconnect", async () => {
+    const { QueryClient } = await import("@tanstack/react-query");
+    const { invalidateTranscriptCaches } = await import("./events");
+    const client = new QueryClient();
+    const first = ["transcript", "s1", "page"] as const;
+    const second = ["transcript", "s2", "entry"] as const;
+    client.setQueryData(first, "one");
+    client.setQueryData(second, "two");
+    await invalidateTranscriptCaches(client);
+    expect(client.getQueryState(first)?.isInvalidated).toBe(true);
+    expect(client.getQueryState(second)?.isInvalidated).toBe(true);
+    expect(client.getQueryData(first)).toBe("one");
+    expect(client.getQueryData(second)).toBe("two");
+  });
+});

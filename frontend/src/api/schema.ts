@@ -157,6 +157,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/sessions/{session_id}/transcript": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List transcript entries in a session scope */
+        get: operations["get_transcript_api_sessions__session_id__transcript_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/sessions/{session_id}/transcript/entries/{entry_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read one transcript entry */
+        get: operations["get_transcript_entry_api_sessions__session_id__transcript_entries__entry_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/sessions/{session_id}/transcript/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Search recorded transcript content */
+        get: operations["search_transcript_api_sessions__session_id__transcript_search_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -650,6 +701,182 @@ export interface components {
             /** Linked Agent Node Id */
             linked_agent_node_id: string | null;
         };
+        /** TranscriptBlockOut */
+        TranscriptBlockOut: {
+            /** Kind */
+            kind: string;
+            /** Native Type */
+            native_type: string | null;
+            /** Text */
+            text: string | null;
+            /** Data */
+            data: unknown | null;
+            /**
+             * Availability
+             * @enum {string}
+             */
+            availability: "recorded" | "unavailable" | "encrypted" | "unsupported" | "truncated";
+        };
+        /** TranscriptCoverageOut */
+        TranscriptCoverageOut: {
+            /** Source Present */
+            source_present: boolean;
+            /** Categories */
+            categories: string[];
+            /** Reasons */
+            reasons: string[];
+        };
+        /** TranscriptEntryDetailOut */
+        TranscriptEntryDetailOut: {
+            /** Entry Id */
+            entry_id: string;
+            /** Owner Id */
+            owner_id: string;
+            /** Source Stream Id */
+            source_stream_id: string;
+            /** Source Position */
+            source_position: number;
+            /** Block Position */
+            block_position: number;
+            /** Native Id */
+            native_id: string | null;
+            /** Native Ordinal */
+            native_ordinal: number | null;
+            timestamp: components["schemas"]["MetricOut"];
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "user_message" | "assistant_message" | "reasoning" | "tool_request" | "tool_result" | "delegation" | "message" | "compaction" | "other";
+            /** Role */
+            role: string | null;
+            /** Sender */
+            sender?: string | null;
+            /** Recipient */
+            recipient?: string | null;
+            /** Channel */
+            channel: string | null;
+            /** Ownership Evidence */
+            ownership_evidence: string | null;
+            /** Preview */
+            preview: string | null;
+            /** Block Availability */
+            block_availability: ("recorded" | "unavailable" | "encrypted" | "unsupported" | "truncated")[];
+            /** Blocks */
+            blocks: components["schemas"]["TranscriptBlockOut"][];
+            coverage: components["schemas"]["TranscriptCoverageOut"];
+            /** Logical Stream Id */
+            logical_stream_id: string | null;
+            /** Source Request Id */
+            source_request_id: string | null;
+            /** Invocation Id */
+            invocation_id: string | null;
+            /** Event Id */
+            event_id: string | null;
+            /** Subject Node Id */
+            subject_node_id: string | null;
+            /** References */
+            references: components["schemas"]["FindingReferenceOut"][];
+        };
+        /** TranscriptEntryOut */
+        TranscriptEntryOut: {
+            /** Entry Id */
+            entry_id: string;
+            /** Owner Id */
+            owner_id: string;
+            /** Source Stream Id */
+            source_stream_id: string;
+            /** Source Position */
+            source_position: number;
+            /** Block Position */
+            block_position: number;
+            /** Native Id */
+            native_id: string | null;
+            /** Native Ordinal */
+            native_ordinal: number | null;
+            timestamp: components["schemas"]["MetricOut"];
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "user_message" | "assistant_message" | "reasoning" | "tool_request" | "tool_result" | "delegation" | "message" | "compaction" | "other";
+            /** Role */
+            role: string | null;
+            /** Sender */
+            sender?: string | null;
+            /** Recipient */
+            recipient?: string | null;
+            /** Channel */
+            channel: string | null;
+            /** Ownership Evidence */
+            ownership_evidence: string | null;
+            /** Preview */
+            preview: string | null;
+            /** Block Availability */
+            block_availability: ("recorded" | "unavailable" | "encrypted" | "unsupported" | "truncated")[];
+        };
+        /** TranscriptPageOut */
+        TranscriptPageOut: {
+            /** Session Id */
+            session_id: string;
+            /** Scope Id */
+            scope_id: string | null;
+            /** Mtime */
+            mtime: number;
+            /** Revision */
+            revision: string;
+            coverage: components["schemas"]["TranscriptCoverageOut"];
+            /** Entries */
+            entries: components["schemas"]["TranscriptEntryOut"][];
+            /** Next Cursor */
+            next_cursor: string | null;
+            /** Previous Cursor */
+            previous_cursor: string | null;
+            /** Anchor Index */
+            anchor_index: number | null;
+        };
+        /** TranscriptSearchHitOut */
+        TranscriptSearchHitOut: {
+            /** Entry Id */
+            entry_id: string;
+            /** Owner Id */
+            owner_id: string;
+            /** Kind */
+            kind: string;
+            /** Role */
+            role: string | null;
+            /** Sender */
+            sender?: string | null;
+            /** Recipient */
+            recipient?: string | null;
+            /** Ownership Evidence */
+            ownership_evidence?: string | null;
+            /** Channel */
+            channel: string | null;
+            timestamp: components["schemas"]["MetricOut"];
+            /** Block Position */
+            block_position: number;
+            /** Snippet */
+            snippet: string;
+        };
+        /** TranscriptSearchOut */
+        TranscriptSearchOut: {
+            /** Session Id */
+            session_id: string;
+            /** Scope Id */
+            scope_id: string | null;
+            /** Mtime */
+            mtime: number;
+            /** Revision */
+            revision: string;
+            coverage: components["schemas"]["TranscriptCoverageOut"];
+            /** Hits */
+            hits: components["schemas"]["TranscriptSearchHitOut"][];
+            /** Next Cursor */
+            next_cursor: string | null;
+            /** Previous Cursor */
+            previous_cursor: string | null;
+        };
         /** ValidationError */
         ValidationError: {
             /** Location */
@@ -900,6 +1127,112 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["NodeDetailOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_transcript_api_sessions__session_id__transcript_get: {
+        parameters: {
+            query?: {
+                node_id?: string | null;
+                limit?: number;
+                after?: string | null;
+                anchor?: string | null;
+                call_key?: string | null;
+                event_id?: string | null;
+            };
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TranscriptPageOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_transcript_entry_api_sessions__session_id__transcript_entries__entry_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+                entry_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TranscriptEntryDetailOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    search_transcript_api_sessions__session_id__transcript_search_get: {
+        parameters: {
+            query: {
+                q: string;
+                node_id?: string | null;
+                limit?: number;
+                after?: string | null;
+            };
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TranscriptSearchOut"];
                 };
             };
             /** @description Validation Error */

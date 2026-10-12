@@ -171,7 +171,7 @@ test("show a turn's timeline, sub-agents and tools in its detail drawer", async 
   await readDetails.getByRole("link", { name: "Open tool details" }).click();
   await expect(dialog.locator(".mantine-Drawer-title .mantine-Text-root")).toHaveText("Read");
   const content = dialog.getByRole("tabpanel");
-  await expect(content.getByText("def parse():")).toBeVisible();
+  await expect(content.locator("pre").getByText("def parse():")).toBeVisible();
   await expect(page.getByTestId("tree-row-u1")).toHaveAttribute("data-inspected", "true");
 });
 
@@ -387,7 +387,7 @@ test("drawer history opens a direct node URL and ignores unknown nodes", async (
   const dialog = page.getByRole("dialog");
   await expect(dialog).toBeVisible();
   await expect(dialog.getByRole("tab", { name: "Content", exact: true })).toHaveAttribute("aria-selected", "true");
-  await expect(dialog.getByRole("tabpanel").getByText("def parse():")).toBeVisible();
+  await expect(dialog.getByRole("tabpanel").locator("pre").getByText("def parse():")).toBeVisible();
   await page.goto(`/sessions/${encodeURIComponent(SESSION)}?node=missing`);
   await expect(page.getByRole("dialog")).toHaveCount(0);
   await expectNodeParam(page, "missing");

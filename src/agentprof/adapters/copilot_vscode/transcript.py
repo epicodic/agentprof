@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 epicodic
-"""Parse `GitHub.copilot-chat/transcripts/<sid>.jsonl`: tool timings and LLM call attribution."""
+"""Parse Copilot transcript records, timings, and legacy LLM call attribution."""
 
 import json
 from dataclasses import dataclass, field
@@ -45,6 +45,15 @@ class ToolEventRecord:
     success: bool | None = None
 
 
+@dataclass(frozen=True)
+class NativeTranscriptRecord:
+    """One source record, kept in physical file order even when its time is missing."""
+
+    event: dict[str, Any]
+    source_position: int
+    native_ordinal: int
+
+
 @dataclass
 class Transcript:
     """Per-`toolCallId` timing and arguments, and per-agent LLM call timestamps (key `None` is the main agent).
@@ -60,7 +69,9 @@ class Transcript:
     tool_request_ids: dict[str, str] = field(default_factory=dict)
     user_messages: list[UserMessage] = field(default_factory=list)
     tool_events: list[ToolEventRecord] = field(default_factory=list)
+    native_records: list[NativeTranscriptRecord] = field(default_factory=list)
     session_id: str | None = None
+    source_filename: str | None = None
     malformed_lines: int = 0
 
 
@@ -162,6 +173,7 @@ def load_transcript(path: Path) -> Transcript:
         Tool timings and LLM calls attributed to the agent whose subagent bracket was open at the time.
     """
     transcript = Transcript()
+    transcript.source_filename = path.name
     # The stack tracks which agent tool call's bracket is currently open; `None` is the main agent.
     stack: list[str | None] = [None]
 
@@ -169,7 +181,25 @@ def load_transcript(path: Path) -> Transcript:
         if not line.strip():
             continue
         try:
-            _apply_event(transcript, stack, json.loads(line), source_order)
+            event = json.loads(line)
+            if isinstance(event, dict):
+                transcript.native_records.append(
+                    NativeTranscriptRecord(
+                        event=event,
+                        source_position=source_order,
+                        native_ordinal=len(transcript.native_records),
+                    )
+                )
+                if event.get("type") == "session.start":
+                    data = event.get("data")
+                    session_id = data.get("sessionId") if isinstance(data, dict) else None
+                    if isinstance(session_id, str):
+                        transcript.session_id = session_id
+                elif transcript.session_id is None and isinstance(event.get("sessionId"), str):
+                    transcript.session_id = event["sessionId"]
+                _apply_event(transcript, stack, event, source_order)
+            else:
+                transcript.malformed_lines += 1
         except (json.JSONDecodeError, KeyError, TypeError, ValueError):
             transcript.malformed_lines += 1
 

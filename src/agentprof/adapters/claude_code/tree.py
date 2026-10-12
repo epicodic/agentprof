@@ -4,15 +4,38 @@
 
 import json
 import re
+from bisect import bisect_right
 from typing import Any
 
 from agentprof.adapters.claude_code.discovery import Subagent
 from agentprof.adapters.claude_code.prompts import first_line, prompt_topic
 from agentprof.adapters.claude_code.tools import tool_info
-from agentprof.adapters.claude_code.transcript import AssistantMessage, Prompt, ToolResult, ToolUse, Transcript
+from agentprof.adapters.claude_code.transcript import (
+    AssistantMessage,
+    NativeRecord,
+    Prompt,
+    ToolResult,
+    ToolUse,
+    Transcript,
+)
 from agentprof.adapters.execution import tool_execution_events
 from agentprof.adapters.turns import split_by_turn
-from agentprof.model import CostMetric, ExecutionEvent, LlmCall, Metric, Node, NodeKind, Tokens, ToolCategory
+from agentprof.model import (
+    CostMetric,
+    ExecutionEvent,
+    LlmCall,
+    Metric,
+    Node,
+    NodeKind,
+    Tokens,
+    ToolCategory,
+    TranscriptBlock,
+    TranscriptCoverage,
+    TranscriptEntry,
+    TranscriptKind,
+    iter_nodes,
+    transcript_entry_id,
+)
 from agentprof.pricing import PriceTable, Usage
 
 _ASK_USER_TOOL = "AskUserQuestion"
@@ -23,6 +46,12 @@ _SYNTHETIC_TURN_ID = "turn-1"
 _SYNTHETIC_MODEL = "<synthetic>"
 _ASYNC_AGENT_LAUNCH = "Async agent launched successfully."
 _SEND_MESSAGE_TOOL = "sendmessage"
+_TEAMMATE_MESSAGE_RE = re.compile(
+    r'^\s*<teammate-message(?P<attributes>(?:\s+[A-Za-z_][\w.-]*="[^"<>]*")*)\s*>'
+    r"(?P<body>.*?)</teammate-message>\s*$",
+    re.DOTALL,
+)
+_TEAMMATE_ATTRIBUTE_RE = re.compile(r'\s+([A-Za-z_][\w.-]*)="([^"<>]*)"')
 _MESSAGE_PREVIEW_LENGTH = 80
 _TARGET_PREVIEW_LENGTH = 60
 
@@ -307,6 +336,207 @@ def _turn_at(turns: list[Node], timestamp_ms: int) -> Node | None:
     return candidates[-1] if candidates else (turns[0] if turns else None)
 
 
+def _record_owner_linear(
+    record: NativeRecord,
+    prompts: list[Prompt],
+    turns: list[Node],
+    root: Node,
+) -> Node:
+    if not prompts or len(prompts) != len(turns) or record.source_position < (prompts[0].source_position or 0):
+        return root
+    matching = [
+        index
+        for index, prompt in enumerate(prompts)
+        if prompt.source_position is not None and prompt.source_position <= record.source_position
+    ]
+    return turns[matching[-1]] if matching else root
+
+
+def _record_owners(
+    records: list[NativeRecord],
+    prompts: list[Prompt],
+    turns: list[Node],
+    root: Node,
+) -> list[Node]:
+    if not prompts or len(prompts) != len(turns):
+        return [root for _ in records]
+    positions = [
+        (prompt.source_position, index) for index, prompt in enumerate(prompts) if prompt.source_position is not None
+    ]
+    if any(positions[index][0] > positions[index + 1][0] for index in range(len(positions) - 1)):
+        return [_record_owner_linear(record, prompts, turns, root) for record in records]
+    position_values = [position for position, _ in positions]
+    first_position = prompts[0].source_position or 0
+    owners: list[Node] = []
+    for record in records:
+        if record.source_position < first_position:
+            owners.append(root)
+            continue
+        index = bisect_right(position_values, record.source_position) - 1
+        owners.append(turns[positions[index][1]] if index >= 0 else root)
+    return owners
+
+
+def _native_entry(
+    record: NativeRecord,
+    block: TranscriptBlock,
+    block_position: int,
+    owner: Node,
+    transcript: Transcript,
+) -> TranscriptEntry:
+    kind: TranscriptKind = record.kind
+    invocation_id: str | None = None
+    if block.kind == "reasoning":
+        kind = "reasoning"
+    elif block.kind == "tool_request":
+        kind = "tool_request"
+        data = block.data
+        invocation_id = str(data["id"]) if isinstance(data, dict) and data.get("id") is not None else None
+        if isinstance(data, dict) and isinstance(data.get("name"), str):
+            raw_input = data.get("input")
+            if (
+                tool_info(data["name"], raw_input if isinstance(raw_input, dict) else {}).category
+                is ToolCategory.SUBAGENT
+            ):
+                kind = "delegation"
+    elif block.kind == "tool_result":
+        kind = "tool_result"
+        data = block.data
+        invocation_id = (
+            str(data["tool_use_id"]) if isinstance(data, dict) and data.get("tool_use_id") is not None else None
+        )
+    elif record.kind != "compaction":
+        kind = "user_message" if record.entry_type == "user" else "assistant_message"
+    sender = None
+    if record.entry_type == "user":
+        body = block.text
+        if body is not None and (match := _TEAMMATE_MESSAGE_RE.fullmatch(body)) is not None:
+            teammate_ids = [
+                value
+                for name, value in _TEAMMATE_ATTRIBUTE_RE.findall(match.group("attributes"))
+                if name == "teammate_id"
+            ]
+            if len(teammate_ids) == 1 and teammate_ids[0]:
+                sender = teammate_ids[0]
+    recipient = None
+    if block.kind == "tool_request" and isinstance(block.data, dict):
+        name = block.data.get("name")
+        tool_input = block.data.get("input")
+        if isinstance(name, str) and name.casefold() == _SEND_MESSAGE_TOOL and isinstance(tool_input, dict):
+            target = tool_input.get("recipient")
+            recipient = target if isinstance(target, str) and target else None
+    stream_id = transcript.native_source_stream_id or transcript.source_stream_id or "claude-code:unknown"
+    return TranscriptEntry(
+        entry_id=transcript_entry_id(stream_id, record.source_position, block_position, record.native_id),
+        owner_id=owner.node_id,
+        source_stream_id=stream_id,
+        source_position=record.source_position,
+        logical_stream_id=transcript.source_stream_id,
+        block_position=block_position,
+        native_id=record.native_id,
+        native_ordinal=record.source_order,
+        timestamp=Metric.exact(record.timestamp_ms) if record.timestamp_ms is not None else Metric.not_available(),
+        kind=kind,
+        role=record.role,
+        sender=sender,
+        recipient=recipient,
+        channel=record.channel,
+        blocks=[block],
+        source_request_id=record.source_request_id,
+        invocation_id=invocation_id,
+    )
+
+
+def _attach_native_transcripts(
+    root: Node,
+    main: Transcript,
+    subagents: list[Subagent],
+    turns: list[Node],
+    builder: _TreeBuilder,
+) -> None:
+    source_owners: list[tuple[Transcript, Node, list[tuple[NativeRecord, Node]]]] = []
+    main_owners = _record_owners(main.native_records, main.prompts, turns, root)
+    main_records = list(zip(main.native_records, main_owners, strict=True))
+    source_owners.append((main, root, main_records))
+    for subagent in subagents:
+        owner = builder._transcript_owners.get(id(subagent.transcript))
+        if owner is not None:
+            source_owners.append(
+                (subagent.transcript, owner, [(record, owner) for record in subagent.transcript.native_records])
+            )
+
+    all_events: dict[tuple[str | None, str], list[ExecutionEvent]] = {}
+    for node in iter_nodes(root):
+        for event in node.execution_events:
+            if event.event_id is not None:
+                all_events.setdefault((event.source_stream_id, event.event_id), []).append(event)
+
+    for transcript, source_owner, records in source_owners:
+        entries_by_owner: dict[int, list[TranscriptEntry]] = {}
+        reasons_by_owner: dict[int, set[str]] = {}
+        for record, owner in records:
+            owner_reasons = reasons_by_owner.setdefault(id(owner), set())
+            blocks = record.blocks or []
+            indexed_blocks = list(enumerate(blocks)) if blocks else [(0, None)]
+            for block_position, block in indexed_blocks:
+                retained_block = block or TranscriptBlock(kind="message")
+                entry = _native_entry(record, retained_block, block_position, owner, transcript)
+                logical = transcript.source_stream_id
+                if entry.invocation_id is not None and logical is not None:
+                    event_kind = "tool-result" if entry.kind == "tool_result" else "tool-start"
+                    matches = all_events.get((logical, f"{event_kind}:{entry.invocation_id}"), [])
+                    exact = [event for event in matches if event.source_order == record.source_order]
+                    if len(exact) == 1:
+                        entry.event_id = exact[0].event_id
+                        entry.subject_node_id = exact[0].subject_node_id
+                elif entry.kind == "user_message" and logical is not None and record.native_id is not None:
+                    matches = all_events.get((logical, f"user-input:{record.native_id}"), [])
+                    exact = [
+                        event
+                        for event in matches
+                        if event.kind == "user_input" and event.source_order == record.source_order
+                    ]
+                    if len(exact) == 1:
+                        entry.event_id = exact[0].event_id
+                        entry.subject_node_id = exact[0].subject_node_id
+                owner.transcript_entries.append(entry)
+                entries_by_owner.setdefault(id(owner), []).append(entry)
+                if retained_block.availability == "encrypted":
+                    owner_reasons.add("encrypted_content")
+                elif retained_block.availability == "unsupported":
+                    owner_reasons.add("unsupported_content")
+                elif retained_block.availability == "unavailable":
+                    owner_reasons.add("unavailable_content")
+            if record.timestamp_ms is None:
+                owner_reasons.add("missing_timestamps")
+        if transcript.malformed_lines:
+            reasons_by_owner.setdefault(id(source_owner), set()).add("malformed_lines_skipped")
+            for _, owner in records:
+                reasons_by_owner.setdefault(id(owner), set()).add("malformed_lines_skipped")
+        owners = {id(owner): owner for _, owner in records}
+        owners.setdefault(id(source_owner), source_owner)
+        for owner_id, owner in owners.items():
+            owner.transcript_coverage = TranscriptCoverage(
+                source_present=True,
+                categories=sorted({entry.kind for entry in entries_by_owner.get(owner_id, [])}),
+                reasons=sorted(reasons_by_owner.get(owner_id, set())),
+            )
+
+        terminal_text_by_owner: dict[int, tuple[Node, str]] = {}
+        for record, owner in records:
+            if record.entry_type != "assistant" or record.stop_reason != "end_turn":
+                continue
+            terminal_blocks = [
+                block for block in record.blocks if block.native_type == "text" and block.text is not None
+            ]
+            if terminal_blocks:
+                terminal_text = "\n".join(block.text or "" for block in terminal_blocks)
+                terminal_text_by_owner[id(owner)] = (owner, terminal_text)
+        for owner, terminal_text in terminal_text_by_owner.values():
+            if owner.tool is None and not owner.result:
+                owner.result = terminal_text
+
+
 def _emit_tool_events(
     root: Node,
     transcripts: list[Transcript],
@@ -429,6 +659,7 @@ def build_root(main: Transcript, subagents: list[Subagent], prices: PriceTable, 
                     for ms in transcript.compactions_ms
                 )
             _emit_tool_events(root, transcripts, builder, unique_ids)
+            _attach_native_transcripts(root, main, subagents, [], builder)
             return root
         prompts = [Prompt(uuid=_SYNTHETIC_TURN_ID, start_ms=int(min(starts)), text="")]
         synthetic_prompt = True
@@ -489,4 +720,5 @@ def build_root(main: Transcript, subagents: list[Subagent], prices: PriceTable, 
             id_counts[tool_use.tool_use_id] = id_counts.get(tool_use.tool_use_id, 0) + 1
     unique_ids = {invocation_id for invocation_id, count in id_counts.items() if count == 1}
     _emit_tool_events(root, transcripts, builder, unique_ids)
+    _attach_native_transcripts(root, main, subagents, visible_turns, builder)
     return root

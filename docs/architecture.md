@@ -24,6 +24,7 @@ src/agentprof/
     copilot_vscode/       # VS Code workspaceStorage: session + transcript + debug log
   analysis/
     pipeline.py           # analyze(): adapter parse -> link resolution -> roll_up -> evidence -> findings
+    transcripts.py        # transcript scoping, source-order merging, paging, search and exact references
     execution.py          # resolve source execution-event links to a unique call in the same logical agent
     call_context.py       # same-agent gaps and intervening event references
     evidence_findings.py  # findings based on cache, waits, resumes, and context evidence
@@ -32,16 +33,17 @@ src/agentprof/
   server/
     app.py                # FastAPI app, SSE broadcaster, static file serving
     schemas.py            # Pydantic response models + mapping from the neutral model
+    transcript_schema.py  # bounded transcript metadata, search and disclosed entry responses
     pricing_schema.py     # effective price-table response model
     openapi.py            # dumps the OpenAPI schema for frontend type generation
     static/               # built frontend (generated, git-ignored)
 frontend/src/
   api/                    # fetch client, TanStack Query hooks, SSE handling, generated schema.ts
   pages/                  # SessionListPage (/), SessionPage (/sessions/:id)
-  components/             # SessionView, SessionHeader, TreeTimeline, ActivityTrack, AxisLabels, ContextCell,
-                          # NodeDrawer, NodeOverview, NodeFindings, NodeTimeline, ChildNodesTable, LlmCallsTable,
-                          # CostSection, ArtifactsTable, ContextSection, FindingsDrawer
-  lib/                    # pure logic with unit tests: tree, timeline, context, cost, artifacts, filters, paging, format, severity
+  components/             # SessionView, SessionHeader, TreeTimeline, ActivityTrack, TranscriptSection, RecordedContentLink,
+                          # AxisLabels, ContextCell, NodeDrawer, NodeOverview, NodeFindings, NodeTimeline,
+                          # ChildNodesTable, LlmCallsTable, CostSection, ArtifactsTable, ContextSection, FindingsDrawer
+  lib/                    # pure logic with unit tests: tree, timeline, context, cost, artifacts, transcript, filters, paging, format, severity
 tests/                    # pytest, mirrors src/ layout; adapter fixtures under tests/adapters/*/fixtures
 tools/qa/                 # dev-only workspace package: `qa`, `build-dist`, `smoke` commands
 docs/                     # conventions, releasing, specs and plans (docs/agents/)
@@ -107,6 +109,14 @@ The API adds `usd` to every cost, and the session list sorts its cost column by 
 `ToolInfo.paths` lists every file a call touches (e.g. each file of a Copilot multi-replace); `path` is its first entry.
 Claude Code `SendMessage` calls retain their target and a short topic preview.
 A successful explicit resume links to an agent node only when its target matches exactly one harness agent ID.
+The neutral transcript types are `TranscriptEntry`, `TranscriptBlock`, `TranscriptCoverage` and `TranscriptAvailability`; each entry lives on its owning tree node, which also carries source coverage.
+Ordered blocks represent messages, reasoning, tool requests and results, delegations, compactions and other recorded items.
+Entry IDs qualify the native occurrence with its physical source stream and source and block positions, while `logical_stream_id` separately identifies the old accounting stream.
+Within each physical stream, recorded source order wins even when timestamps are missing or regress; independent stream heads merge by timestamp, with stream and source positions as deterministic ties rather than evidence of causality.
+With no `node_id`, session scope includes every node in the tree exactly once; an explicit session-root `node_id` selects only the main root and its turns.
+Agent scope includes that agent's own turns but excludes descendant agents, turn scope stays on that turn, and tool scope selects only entries linked to that invocation.
+A block with `text=None` has no readable text, while `text=""` with recorded availability is an explicitly recorded empty body; encrypted blocks omit ciphertext, and availability and coverage describe partial or unsupported bodies without treating reasoning tokens as readable text.
+Adapters retain all readable mixed native blocks and typed structured values they can parse, including partial bodies when the source is truncated.
 
 ### Adapters (`adapters/`)
 
@@ -127,7 +137,9 @@ Copilot's `tree.py` treats an agent's most frequent debug-log `debugName` as its
 When cached tokens are missing, Copilot leaves both cache reads and unsplittable uncached input unavailable rather than reporting an exact zero.
 Copilot keeps debug-log span IDs as call identities and links generated tool IDs through `agent_response` records whose span is `agent-msg-<request span>`.
 Typed `tool_call_response` parts in debug request inputs identify result users; the earliest request containing a completed tool’s result is linked within the same agent stream.
-Complete typed tool identity headers before Copilot’s truncation marker remain usable without retaining response content.
+Copilot keeps mixed session IDs from one physical transcript file in the same source stream.
+Debug responses and `request_history_snapshot` records share the physical debug-log stream; the snapshot channel is distinguished in its entry metadata and retains the same owning logical accounting stream.
+Claude Code retains native blocks from the main and subagent transcripts, Codex keeps source-positioned rollout records including out-of-turn root records and continuation files, and Copilot records typed export and debug-log bodies with truthful partial-source coverage.
 Missing or ambiguous metadata remains unresolved, and repeated result history in later calls does not duplicate the first-result-user link.
 The Codex adapter groups rollout JSONL files by root session id, maps each `token_usage_record` to an LLM call, and nests subagent rollouts under delegation calls when their metadata permits it.
 Native `response_item` compaction markers retain exact timestamps, source order and available event IDs without exposing encrypted content.
@@ -188,6 +200,9 @@ All public methods are thread-safe behind one `RLock`.
 | `GET /api/sessions/{id}/findings` | flat findings ordered by known estimated avoidable cost, severity, and time |
 | `GET /api/sessions/{id}/diagnostics` | parse counts and bounded redacted malformed-line details |
 | `GET /api/sessions/{id}/nodes/{node_id}` | `NodeDetailOut`: prompt, result, raw tool arguments |
+| `GET /api/sessions/{id}/transcript` | bounded entry metadata window (default 50, limit 1–100), coverage, mtime and revision; optional `node_id` scope, centered anchor, and exact call or event filters |
+| `GET /api/sessions/{id}/transcript/entries/{entry_id}` | one explicitly requested entry's ordered full blocks, coverage and exact supporting references |
+| `GET /api/sessions/{id}/transcript/search` | literal `q` search with Unicode case-folding across full text bodies and JSON arguments; paged `hits` return metadata and snippets up to 240 characters, with coverage, mtime and revision |
 | `GET /sessions/{id}` with JSON `Accept` or `format=json` | the same `SessionOut` as the API route |
 | `GET /` and `/sessions/{id}` | built frontend shell |
 
@@ -207,6 +222,13 @@ Preceding events contain IDs and times only; raw prompts and tool text remain on
 Malformed-line details are capped and redact values; skipped records can make totals incomplete.
 The `Broadcaster` moves registry events from the worker thread onto the asyncio loop and into one queue per SSE client.
 Unknown ids give 404; a session that fails to analyse gives 422 with the error message.
+Without `node_id`, transcript listing and search cover all nodes in the session exactly once; with `node_id`, both apply the selected node's ownership scope.
+Transcript listing defaults to 50 entries, accepts limits from 1 to 100, and uses exclusive `after` cursors or centered `anchor` windows; exact `call_key` and `event_id` filters require one owning `node_id` and cannot be combined.
+Transcript listing and search return only bounded metadata previews (up to 240 characters) and never attach transcript bodies to tree, projection, summary, list or SSE responses.
+`GET /api/sessions/{id}/transcript/entries/{entry_id}` returns every ordered block on explicit request, and the frontend makes this request only after a row is disclosed.
+Encrypted blocks omit ciphertext, and partial or unavailable blocks keep their availability labels.
+Transcript cursors bind session, owner scope, query and invocation filter to a stable entry ID, so appends preserve a cursor while a vanished entry returns 409 and requires refreshing from the current window.
+Malformed or cross-scope cursors, blank searches and invalid filter combinations return 422; unknown sessions, owners, entries or anchors return 404.
 
 ### Frontend (`frontend/`)
 
@@ -485,7 +507,20 @@ For session nodes, calls and tools stay grouped by owning turn; for turns and ag
 Call rows show recorded start time, duration, cost and total tokens; expansion retains detailed timing, cost parts and token categories.
 Tool groups and tool rows expose their own invocation times and requester/result-user links without duplicating result events.
 
-Content lists artifacts and loads the selected node's full prompt, result and pretty-printed tool arguments on demand, with loading and error states.
+Content retains artifacts, prompt and result inspection, and adds `TranscriptSection` for bounded windows of 50 entry metadata rows with full ordered blocks loaded only after disclosure.
+Transcript metadata and submitted searches load while Content is active, hidden Content queries stay disabled, and entry bodies load only for explicitly expanded rows.
+Each transcript row has one disclosure triangle, and only a search result's actual snippet links to its surrounding conversation.
+Transcript headings resolve recorded senders and recipients against the session tree and show agent-to-agent messages without exposing raw transport roles.
+Readable message and reasoning bodies render safe Markdown, while tool output and structured values remain literal preformatted text.
+Participant labels use tree ownership plus recorded sender and recipient evidence, and uncertain root user records remain incoming messages instead of guessed human prompts.
+Transcript search is submitted against the current owner or the whole session, and exact call/event filters return only transcript entries linked to that recorded invocation.
+Rows can be marked with Enter or Space without opening them; exact selection uses the owner-qualified transcript reference, blue tint, and canonical `node=<owner>&sel=transcript&owner=<owner>&entry=<entry>&tab=content` URL, while legacy inspection URLs remain supported.
+`RecordedContentLink` requests at most one entry for an exact call or event filter and shows a caption only when the call or event reference resolves uniquely; linked detail references use the existing Workflow navigation.
+Back navigation restores the prior query, owner or whole-session scope, page, expanded disclosures and reading position.
+Refresh keeps the loaded window, query and mark visible while retrying from the first current page, replacing a cursor that referred to a vanished entry.
+Transcript windows preserve a visible entry and its pixel position during refreshes, and opt-in Follow latest pauses on manual interaction and stays disabled during search.
+SSE updates, reconnects and removals invalidate query keys under `['transcript', sessionId]` independently of root mtime and retain cached windows and disclosed bodies when a refresh fails.
+The selected node's full prompt, result and pretty-printed tool arguments load on demand, with loading and error states.
 `ArtifactsTable` lists paths written or edited by the node's own direct tool calls, with action, edit count and a failure badge, using `data-testid="artifact-<path>"`.
 On narrow screens, child topics and artifact paths wrap, while the timeline, cost and context charts scroll together inside their shared container.
 
@@ -545,6 +580,9 @@ browser GET /api/sessions/{id}
        cache (LRU 20)
   -> session_out(session, mtime) -> SessionOut
 node selected -> GET .../nodes/{node_id} -> node_detail_out(node) -> prompt, result, arguments
+Content disclosure -> GET /api/sessions/{id}/transcript/entries/{entry_id} -> ordered native blocks and exact supporting references
+Transcript window -> GET /api/sessions/{id}/transcript -> scoped metadata, coverage and stable cursors
+Transcript search -> GET /api/sessions/{id}/transcript/search -> literal full-body and JSON-argument matches with bounded snippets
 file changes -> worker emits "updated" with newer mtime -> frontend refetches the open session
 ```
 

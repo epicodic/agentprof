@@ -2,6 +2,7 @@
 # Copyright (c) 2026 epicodic
 """Agent-neutral data model shared by all adapters, the analysis layer and the server."""
 
+import base64
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -253,6 +254,66 @@ class FindingReference:
     label: str
 
 
+TranscriptAvailability = Literal["recorded", "unavailable", "encrypted", "unsupported", "truncated"]
+TranscriptKind = Literal[
+    "user_message",
+    "assistant_message",
+    "reasoning",
+    "tool_request",
+    "tool_result",
+    "delegation",
+    "message",
+    "compaction",
+    "other",
+]
+
+
+@dataclass
+class TranscriptBlock:
+    """One ordered content part; unavailable and recorded-empty content remain distinct."""
+
+    kind: str
+    native_type: str | None = None
+    text: str | None = None
+    data: object | None = None
+    availability: TranscriptAvailability = "recorded"
+
+
+@dataclass
+class TranscriptEntry:
+    """One recorded transcript occurrence stored on the node that owns its source stream."""
+
+    entry_id: str
+    owner_id: str
+    source_stream_id: str
+    source_position: int
+    logical_stream_id: str | None = None
+    block_position: int = 0
+    native_id: str | None = None
+    native_ordinal: int | None = None
+    timestamp: Metric = field(default_factory=Metric.not_available)
+    kind: TranscriptKind = "other"
+    role: str | None = None
+    sender: str | None = None
+    recipient: str | None = None
+    channel: str | None = None
+    blocks: list[TranscriptBlock] = field(default_factory=list)
+    source_request_id: str | None = None
+    invocation_id: str | None = None
+    event_id: str | None = None
+    subject_node_id: str | None = None
+    ownership_evidence: str | None = None
+
+
+@dataclass
+class TranscriptCoverage:
+    """What transcript source categories an adapter could inspect and why content may be incomplete."""
+
+    source_present: bool = False
+    categories: list[str] = field(default_factory=list)
+    reasons: list[str] = field(default_factory=list)
+
+
 @dataclass
 class Finding:
     """A waste heuristic hit, attached to a node."""
@@ -304,6 +365,20 @@ class Node:
     context_peak: Metric = field(default_factory=Metric.not_available)
     compactions: list[Metric] = field(default_factory=list)
     execution_events: list[ExecutionEvent] = field(default_factory=list)
+    transcript_entries: list[TranscriptEntry] = field(default_factory=list)
+    transcript_coverage: TranscriptCoverage = field(default_factory=TranscriptCoverage)
+
+
+def transcript_entry_id(
+    source_stream_id: str,
+    source_position: int,
+    block_position: int = 0,
+    native_id: str | None = None,
+) -> str:
+    """Build an append-stable source-qualified identity; position disambiguates repeated native IDs."""
+    stream = base64.urlsafe_b64encode(source_stream_id.encode()).decode().rstrip("=")
+    native = "none" if native_id is None else f"id{base64.urlsafe_b64encode(native_id.encode()).decode().rstrip('=')}"
+    return f"transcript.{stream}.{native}.{source_position}.{block_position}"
 
 
 def iter_nodes(root: Node) -> Iterator[Node]:

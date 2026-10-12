@@ -18,6 +18,7 @@ import { DetailLink } from "./DetailLink";
 import tableClasses from "./DetailTable.module.css";
 import selectionClasses from "./EntitySelection.module.css";
 import { useInspectionMenuTarget } from "./InspectionMenu";
+import { RecordedContentLink } from "./RecordedContentLink";
 import { useSessionInteraction } from "./SessionInteraction";
 
 const tokenText = (value: { value: number | null; provenance: string }) =>
@@ -155,6 +156,7 @@ export function LlmCallRow({
               ))}
             </dl>
             <CallDetails call={call} />
+            {callRef !== null && <RecordedContentLink ownerId={ownerId} callKey={callRef.callKey} active={expanded} />}
           </Table.Td>
         </Table.Tr>
       )}

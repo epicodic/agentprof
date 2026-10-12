@@ -12,8 +12,13 @@ export interface InspectionLocation {
   invalidSelection: boolean;
 }
 
+export interface MarkEntityTransition {
+  location: InspectionLocation;
+  inspectionRequest: null;
+}
+
 const DETAIL_TABS: readonly DetailTab[] = ["overview", "workflow", "calls", "content"];
-const SELECTION_PARAMS = ["sel", "owner", "call", "entity", "event"] as const;
+const SELECTION_PARAMS = ["sel", "owner", "call", "entity", "event", "entry"] as const;
 
 function isDetailTab(value: string | null): value is DetailTab {
   return value !== null && DETAIL_TABS.includes(value as DetailTab);
@@ -22,6 +27,22 @@ function isDetailTab(value: string | null): value is DetailTab {
 export function detailTab(kind: string, tab: DetailTab | null): DetailTab {
   if (kind === "tool") return tab === "overview" || tab === "content" ? tab : "content";
   return tab === "calls" ? "workflow" : (tab ?? "overview");
+}
+
+/** Mark an entity while keeping the currently inspected panel and clearing explicit inspection work. */
+export function markEntityTransition(
+  location: InspectionLocation,
+  selection: EntityRef,
+  inspectedNodeKind?: string,
+): MarkEntityTransition {
+  const tab =
+    selection.kind === "transcript" && location.nodeId !== null && location.tab === null
+      ? detailTab(inspectedNodeKind ?? "agent", null)
+      : location.tab;
+  return {
+    location: { ...location, tab, selection, invalidSelection: false },
+    inspectionRequest: null,
+  };
 }
 
 export function parseInspection(sessionId: string, params: URLSearchParams): InspectionLocation {
@@ -48,11 +69,17 @@ export function parseInspection(sessionId: string, params: URLSearchParams): Ins
     }
   } else if (selector === "event" && owner !== null && owner.length > 0 && event !== null && event.length > 0) {
     selection = { kind: "event", sessionId, ownerId: owner, eventId: event };
+  } else if (selector === "transcript" && owner !== null && owner.length > 0) {
+    const entry = params.get("entry");
+    if (entry !== null && entry.length > 0)
+      selection = { kind: "transcript", sessionId, ownerId: owner, entryId: entry };
   }
 
+  const nodeId = params.get("node") || null;
+  const tab = isDetailTab(rawTab) ? rawTab : selection?.kind === "transcript" && nodeId !== null ? "content" : null;
   return {
-    nodeId: params.get("node") || null,
-    tab: isDetailTab(rawTab) ? rawTab : null,
+    nodeId,
+    tab,
     selection,
     invalidSelection: selectorPresent && selection === null,
   };
@@ -80,6 +107,10 @@ export function writeInspection(params: URLSearchParams, location: InspectionLoc
       result.set("sel", "event");
       result.set("owner", location.selection.ownerId);
       result.set("event", location.selection.eventId);
+    } else if (location.selection?.kind === "transcript") {
+      result.set("sel", "transcript");
+      result.set("owner", location.selection.ownerId);
+      result.set("entry", location.selection.entryId);
     }
   }
   return result;

@@ -14,6 +14,14 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 
 from agentprof.analysis.agent_summary import agent_ids
+from agentprof.analysis.transcripts import (
+    TranscriptCursorConflict,
+    TranscriptCursorError,
+    page_entries,
+    scope_coverage,
+    scope_entries,
+    search_entries,
+)
 from agentprof.model import Node, Session, iter_nodes
 from agentprof.pricing import PriceTable
 from agentprof.registry import EventKind, Registry, RegistryEvent, SessionUnavailable
@@ -37,6 +45,15 @@ from agentprof.server.schemas import (
     node_out,
     session_out,
     summary_out,
+)
+from agentprof.server.transcript_schema import (
+    TranscriptEntryDetailOut,
+    TranscriptPageOut,
+    TranscriptSearchOut,
+    coverage_out,
+    transcript_detail_out,
+    transcript_entry_out,
+    transcript_hit_out,
 )
 
 _KEEP_ALIVE_S = 15.0
@@ -367,6 +384,126 @@ def create_app(registry: Registry, static_dir: Path = _STATIC_DIR, pricing: Pric
         if node is None:
             raise HTTPException(status_code=404, detail=f"unknown node {node_id!r}")
         return node_detail_out(node)
+
+    @app.get("/api/sessions/{session_id}/transcript", summary="List transcript entries in a session scope")
+    def get_transcript(
+        session_id: str,
+        node_id: str | None = None,
+        limit: Annotated[int, Query(ge=1, le=100)] = 50,
+        after: str | None = None,
+        anchor: str | None = None,
+        call_key: str | None = None,
+        event_id: str | None = None,
+    ) -> TranscriptPageOut:
+        if after is not None and anchor is not None:
+            raise HTTPException(status_code=422, detail="after and anchor cannot be used together")
+        if call_key is not None and event_id is not None:
+            raise HTTPException(status_code=422, detail="call_key and event_id are mutually exclusive")
+        if (call_key is not None or event_id is not None) and node_id is None:
+            raise HTTPException(status_code=422, detail="call_key and event_id require node_id")
+        try:
+            session, mtime = registry.session(session_id)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail=f"unknown session {session_id!r}") from error
+        except SessionUnavailable as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        try:
+            entries = scope_entries(session.root, node_id, call_key=call_key, event_id=event_id)
+            page = page_entries(
+                entries,
+                limit=limit,
+                session_id=session_id,
+                scope_id=node_id,
+                call_key=call_key,
+                event_id=event_id,
+                after=after,
+                anchor=anchor,
+            )
+            coverage = scope_coverage(session.root, node_id)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail=f"unknown transcript anchor or owner {str(error)!r}") from error
+        except TranscriptCursorConflict as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except TranscriptCursorError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return TranscriptPageOut(
+            session_id=session_id,
+            scope_id=node_id,
+            mtime=mtime,
+            revision=f"{mtime:.6f}",
+            coverage=coverage_out(coverage),
+            entries=[transcript_entry_out(entry) for entry in page.entries],
+            next_cursor=page.next_cursor,
+            previous_cursor=page.previous_cursor,
+            anchor_index=page.anchor_index,
+        )
+
+    @app.get("/api/sessions/{session_id}/transcript/entries/{entry_id}", summary="Read one transcript entry")
+    def get_transcript_entry(session_id: str, entry_id: str) -> TranscriptEntryDetailOut:
+        try:
+            session, _ = registry.session(session_id)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail=f"unknown session {session_id!r}") from error
+        except SessionUnavailable as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        entry = next(
+            (
+                entry
+                for node in iter_nodes(session.root)
+                for entry in node.transcript_entries
+                if entry.entry_id == entry_id
+            ),
+            None,
+        )
+        if entry is None:
+            raise HTTPException(status_code=404, detail=f"unknown transcript entry {entry_id!r}")
+        return transcript_detail_out(session.root, entry)
+
+    @app.get("/api/sessions/{session_id}/transcript/search", summary="Search recorded transcript content")
+    def search_transcript(
+        session_id: str,
+        q: str,
+        node_id: str | None = None,
+        limit: Annotated[int, Query(ge=1, le=100)] = 50,
+        after: str | None = None,
+    ) -> TranscriptSearchOut:
+        if not q.strip():
+            raise HTTPException(status_code=422, detail="q must not be blank")
+        try:
+            session, mtime = registry.session(session_id)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail=f"unknown session {session_id!r}") from error
+        except SessionUnavailable as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        try:
+            entries = scope_entries(session.root, node_id)
+            hits = search_entries(entries, q)
+            page = page_entries(
+                [hit.entry for hit in hits],
+                limit=limit,
+                session_id=session_id,
+                scope_id=node_id,
+                query=q,
+                after=after,
+            )
+            hit_by_id = {hit.entry.entry_id: hit for hit in hits}
+            coverage = scope_coverage(session.root, node_id)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail=f"unknown transcript owner {str(error)!r}") from error
+        except TranscriptCursorConflict as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except TranscriptCursorError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return TranscriptSearchOut(
+            session_id=session_id,
+            scope_id=node_id,
+            mtime=mtime,
+            revision=f"{mtime:.6f}",
+            coverage=coverage_out(coverage),
+            hits=[transcript_hit_out(hit_by_id[entry.entry_id]) for entry in page.entries],
+            next_cursor=page.next_cursor,
+            previous_cursor=page.previous_cursor,
+        )
 
     index_file = static_dir / "index.html"
 

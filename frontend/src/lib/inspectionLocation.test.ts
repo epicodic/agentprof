@@ -3,7 +3,7 @@
 
 import { describe, expect, it } from "vitest";
 import type { EntityRef } from "./entities";
-import { detailTab, parseInspection, writeInspection } from "./inspectionLocation";
+import { detailTab, markEntityTransition, parseInspection, writeInspection } from "./inspectionLocation";
 
 const parse = (search: string, sessionId = "session /é"): ReturnType<typeof parseInspection> =>
   parseInspection(sessionId, new URLSearchParams(search));
@@ -186,5 +186,60 @@ describe("writeInspection", () => {
       invalidSelection: false,
     });
     expect(closed.toString()).toBe("");
+  });
+});
+
+describe("transcript selections", () => {
+  it("roundtrips transcript identity with encoded owner and entry IDs", () => {
+    const selection: EntityRef = {
+      kind: "transcript",
+      sessionId: "s",
+      ownerId: "owner /雪&",
+      entryId: "entry:/?+%",
+    };
+    const written = writeInspection(new URLSearchParams("debug=1&sel=call&owner=old&call=id%3Ax"), {
+      nodeId: "owner /雪&",
+      tab: "content",
+      selection,
+      invalidSelection: false,
+    });
+    expect(written.toString()).toBe(
+      "debug=1&node=owner+%2F%E9%9B%AA%26&tab=content&sel=transcript&owner=owner+%2F%E9%9B%AA%26&entry=entry%3A%2F%3F%2B%25",
+    );
+    expect(parseInspection("s", written).selection).toEqual(selection);
+  });
+
+  it("rejects transcript selectors with missing owner or entry IDs", () => {
+    for (const search of [
+      "sel=transcript",
+      "sel=transcript&owner=o",
+      "sel=transcript&entry=e",
+      "sel=transcript&owner=&entry=e",
+      "sel=transcript&owner=o&entry=",
+    ]) {
+      const parsed = parse(search);
+      expect(parsed.selection, search).toBeNull();
+      expect(parsed.invalidSelection, search).toBe(true);
+    }
+  });
+
+  it("defaults an explicit transcript inspection to Content when its tab is absent", () => {
+    expect(parse("node=owner&sel=transcript&owner=owner&entry=entry")).toMatchObject({
+      nodeId: "owner",
+      tab: "content",
+      invalidSelection: false,
+    });
+    expect(parse("sel=transcript&owner=owner&entry=entry")).toMatchObject({ nodeId: null, tab: null });
+  });
+
+  it("keeps the inspected panel tab when marking a transcript and clears explicit inspection", () => {
+    const current = parseInspection("s", new URLSearchParams("node=owner"));
+    const ref: EntityRef = { kind: "transcript", sessionId: "s", ownerId: "owner", entryId: "entry" };
+    const transition = markEntityTransition(current, ref, "agent");
+    const written = writeInspection(new URLSearchParams("node=owner"), transition.location);
+    const reparsed = parseInspection("s", written);
+    expect(reparsed.tab).toBe("overview");
+    expect(reparsed.selection).toEqual(ref);
+    expect(transition.inspectionRequest).toBeNull();
   });
 });

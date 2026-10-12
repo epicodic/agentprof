@@ -10,6 +10,7 @@ import { formatDuration, formatTimestamp, withProvenance } from "../lib/format";
 import { detailLink, recordedCallTargets } from "../lib/inspectionActions";
 import type { ToolExecution } from "../lib/toolExecutions";
 import classes from "./DetailTable.module.css";
+import { RecordedContentLink } from "./RecordedContentLink";
 import { useSessionInteraction } from "./SessionInteraction";
 
 export function ToolExecutionDetails({
@@ -142,6 +143,19 @@ export function ToolExecutionDetails({
           Tool details unavailable
         </Text>
       )}
+      {[
+        ...new Map(
+          execution.events.filter((event) => event.event_id !== null).map((event) => [event.event_id, event]),
+        ).values(),
+      ].map((event) => (
+        <RecordedContentLink
+          key={event.event_id}
+          ownerId={execution.ownerId}
+          eventId={event.event_id ?? undefined}
+          active
+          caption={`${event.kind === "tool_start" ? "Request" : event.kind === "tool_result" ? "Result" : event.kind.replaceAll("_", " ")} recorded content`}
+        />
+      ))}
     </Stack>
   );
 }

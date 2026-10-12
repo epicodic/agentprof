@@ -236,7 +236,7 @@ test("phone call summaries fit and expanded metrics remain accessible", async ({
   ).toHaveCount(0);
   await invocation.locator("xpath=following-sibling::tr[1]").getByRole("link", { name: "Open tool details" }).click();
   await expect(dialog.getByRole("tab", { name: "Content", exact: true })).toHaveAttribute("aria-selected", "true");
-  await expect(dialog.getByRole("tabpanel").getByText("def parse():")).toBeVisible();
+  await expect(dialog.getByRole("tabpanel").locator("pre").getByText("def parse():")).toBeVisible();
 });
 
 test("phone trailing execution event retains its known since-start metric", async ({ page }) => {
