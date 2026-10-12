@@ -18,7 +18,6 @@ from agentprof.model import (
     Node,
     NodeKind,
     Provenance,
-    TranscriptBlock,
     TranscriptCoverage,
     TranscriptEntry,
     iter_nodes,
@@ -473,8 +472,3 @@ def page_entries(
     if anchor_index is not None:
         anchor_index = selected_anchor_index - start
     return TranscriptPage(page, next_cursor, previous_cursor, anchor_index)
-
-
-def entry_blocks(entry: TranscriptEntry) -> list[TranscriptBlock]:
-    """Return a copy of the complete block sequence for the explicit detail endpoint."""
-    return list(entry.blocks)

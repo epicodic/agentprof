@@ -80,6 +80,7 @@ class Registry:
         self._cache_size = cache_size
         self._rows: dict[str, SessionRow] = {}
         self._cache: OrderedDict[str, tuple[float, Session]] = OrderedDict()
+        self._failures: dict[str, tuple[float, str]] = {}
         self._in_flight: dict[tuple[str, float], threading.Event] = {}
         self._subscribers: list[Callable[[RegistryEvent], None]] = []
         self._lock = threading.RLock()
@@ -165,9 +166,10 @@ class Registry:
         self._emit(events)
 
     def _forget(self, session_id: str) -> None:
-        """Drop a row and its cached analysis; the lock must be held."""
+        """Drop a row, its cached analysis and its remembered failure; the lock must be held."""
         del self._rows[session_id]
         self._cache.pop(session_id, None)
+        self._failures.pop(session_id, None)
 
     def _next_pending(self) -> SessionRef | None:
         """The most recently changed row without a current summary."""
@@ -213,6 +215,9 @@ class Registry:
             if cached is not None and cached[0] == ref.mtime:
                 self._cache.move_to_end(session_id)
                 return cached[1], ref.mtime
+            failure = self._failures.get(session_id)
+            if failure is not None and failure[0] == ref.mtime:
+                raise SessionUnavailable(failure[1])
             key = (session_id, ref.mtime)
             running = self._in_flight.get(key)
             if running is None:
@@ -223,9 +228,13 @@ class Registry:
         try:
             session = analyze(self._adapters[ref.agent], ref)
         except Exception as error:  # noqa: BLE001 - reported to the caller as unavailable
-            raise SessionUnavailable(_describe(error)) from error
+            message = _describe(error)
+            with self._lock:
+                self._failures[session_id] = (ref.mtime, message)
+            raise SessionUnavailable(message) from error
         else:
             with self._lock:
+                self._failures.pop(session_id, None)
                 self._cache[session_id] = (ref.mtime, session)
                 self._cache.move_to_end(session_id)
                 while len(self._cache) > self._cache_size:

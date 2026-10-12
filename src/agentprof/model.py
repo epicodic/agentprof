@@ -51,6 +51,28 @@ class Metric:
         return float(self.value)
 
 
+def sum_metrics(metrics: list[Metric]) -> Metric:
+    """Add the available values; `estimated` if some are missing, `n/a` if none is available."""
+    available = [metric for metric in metrics if metric.value is not None]
+    if not available:
+        return Metric.not_available()
+    provenance = worst_provenance(*(metric.provenance for metric in available))
+    if len(available) < len(metrics):
+        provenance = worst_provenance(provenance, Provenance.ESTIMATED)
+    return Metric(value=sum(metric.number() for metric in available), provenance=provenance)
+
+
+def extreme_metric(metrics: list[Metric], *, greatest: bool) -> Metric:
+    """The largest or smallest available value; `estimated` if some are missing, `n/a` if none is available."""
+    available = [metric for metric in metrics if metric.value is not None]
+    if not available:
+        return Metric.not_available()
+    chosen = (max if greatest else min)(available, key=Metric.number)
+    if len(available) < len(metrics):
+        return Metric(value=chosen.value, provenance=worst_provenance(chosen.provenance, Provenance.ESTIMATED))
+    return chosen
+
+
 @dataclass(frozen=True)
 class CostMetric:
     """A cost in the agent's native unit (e.g. `credits`, `USD`); `usd_per_unit` converts other units to USD."""

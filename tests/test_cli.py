@@ -13,7 +13,8 @@ from fastapi.testclient import TestClient
 
 from agentprof.adapters import load_adapters
 from agentprof.adapters.base import AdapterConfig
-from agentprof.cli import _serve, browser_url, is_loopback, main
+from agentprof.cli import _serve, allowed_hosts, browser_url, is_loopback, main
+from agentprof.pricing import PriceTable
 from agentprof.registry import Registry
 from agentprof.server.app import create_app
 
@@ -130,7 +131,7 @@ def test_main_serves_the_price_file_selected_by_cli(copilot_storage: Path, tmp_p
     captured: list[dict[str, object]] = []
 
     def serve(app: FastAPI, host: str, port: int, on_started: Callable[[], None]) -> None:
-        with TestClient(app) as client:
+        with TestClient(app, base_url=f"http://{host}:{port}") as client:
             captured.append(client.get("/api/pricing").json())
 
     roots = ["--claude-root", str(_CLAUDE_PROJECTS), "--copilot-root", str(copilot_storage)]
@@ -186,3 +187,40 @@ def test_serve_calls_on_started_only_once_the_port_accepts_connections(copilot_s
     _serve(app, "127.0.0.1", port, on_started)
 
     assert outcome == [True]
+
+
+def test_allowed_hosts_are_the_loopback_names_plus_the_bound_host() -> None:
+    assert allowed_hosts("127.0.0.1") == {"localhost", "127.0.0.1", "::1"}
+    assert allowed_hosts("192.168.1.5") == {"localhost", "127.0.0.1", "::1", "192.168.1.5"}
+    assert allowed_hosts("[::1]") == {"localhost", "127.0.0.1", "::1"}
+    assert allowed_hosts("0.0.0.0") is None
+    assert allowed_hosts("::") is None
+
+
+def test_main_rejects_requests_for_foreign_host_names(copilot_storage: Path) -> None:
+    statuses: list[int] = []
+
+    def serve(app: FastAPI, host: str, port: int, on_started: Callable[[], None]) -> None:
+        with TestClient(app, base_url="http://attacker.example") as client:
+            statuses.append(client.get("/api/sessions").status_code)
+        with TestClient(app, base_url=f"http://{host}:{port}") as client:
+            statuses.append(client.get("/api/sessions").status_code)
+
+    roots = ["--claude-root", str(_CLAUDE_PROJECTS), "--copilot-root", str(copilot_storage)]
+
+    assert main([*roots, "--no-browser"], serve=serve) == 0
+    assert statuses == [400, 200]
+
+
+def test_main_loads_the_price_table_once(copilot_storage: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    loaded: list[Path | None] = []
+    original = PriceTable.load
+
+    def counting_load(path: Path | None = None) -> PriceTable:
+        loaded.append(path)
+        return original(path)
+
+    monkeypatch.setattr(PriceTable, "load", staticmethod(counting_load))
+
+    assert _run(_Recorder(), copilot_storage, "--no-browser") == 0
+    assert loaded == [None]

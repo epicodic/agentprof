@@ -62,7 +62,7 @@ class CodexAdapter:
     def __init__(self, config: AdapterConfig) -> None:
         override = config.roots.get(self.name)
         self._root = override if override is not None else default_sessions_root(Path.home())
-        self._prices = PriceTable.load(config.pricing_file)
+        self._prices = config.price_table()
 
     def _ref(self, files: SessionFiles) -> SessionRef:
         path = files.main if files.main is not None else files.files[0]

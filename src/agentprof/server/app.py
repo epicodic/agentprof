@@ -4,14 +4,16 @@
 
 import asyncio
 import json
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Collection
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated, Any
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, StreamingResponse
+from starlette.datastructures import Headers
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from agentprof.analysis.agent_summary import agent_ids
 from agentprof.analysis.transcripts import (
@@ -255,8 +257,58 @@ def _sorted_findings(root: Node) -> list[FindingOut]:
     return [finding for finding, _ in sorted(attached, key=order)]
 
 
-def create_app(registry: Registry, static_dir: Path = _STATIC_DIR, pricing: PriceTable | None = None) -> FastAPI:
-    """Build the application with the effective pricing table and built frontend."""
+def host_name(header: str) -> str | None:
+    """The lower-case host name of a `Host` header, without port or IPv6 brackets; `None` if malformed."""
+    try:
+        return urlsplit(f"//{header}").hostname
+    except ValueError:
+        return None
+
+
+class _HostCheck:
+    """Reject requests whose `Host` header names another server, which blocks DNS-rebinding attacks."""
+
+    def __init__(self, app: ASGIApp, allowed: frozenset[str]) -> None:
+        self._app = app
+        self._allowed = allowed
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if (
+            scope["type"] in ("http", "websocket")
+            and host_name(Headers(scope=scope).get("host", "")) not in self._allowed
+        ):
+            if scope["type"] == "websocket":
+                await send({"type": "websocket.close", "code": 1008})
+            else:
+                await PlainTextResponse("Invalid host header", status_code=400)(scope, receive, send)
+            return
+        await self._app(scope, receive, send)
+
+
+def analysed_session(registry: Registry, session_id: str) -> tuple[Session, float]:
+    """The analysed session and its file version, or the API's 404 or 422 error.
+
+    Raises:
+        HTTPException: 404 for an unknown session, 422 for one that cannot be analysed.
+    """
+    try:
+        return registry.session(session_id)
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail=f"unknown session {session_id!r}") from error
+    except SessionUnavailable as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+def create_app(
+    registry: Registry,
+    static_dir: Path = _STATIC_DIR,
+    pricing: PriceTable | None = None,
+    allowed_hosts: Collection[str] | None = None,
+) -> FastAPI:
+    """Build the application with the effective pricing table and built frontend.
+
+    `allowed_hosts` lists the host names the server answers to; `None` answers to any.
+    """
     broadcaster = Broadcaster()
     price_table = pricing if pricing is not None else PriceTable.load()
 
@@ -268,6 +320,8 @@ def create_app(registry: Registry, static_dir: Path = _STATIC_DIR, pricing: Pric
         unsubscribe()
 
     app = FastAPI(title="agentprof", lifespan=lifespan)
+    if allowed_hosts is not None:
+        app.add_middleware(_HostCheck, allowed=frozenset(host.lower() for host in allowed_hosts))
     app.state.end_streams = broadcaster.end_streams
 
     @app.get("/api/", include_in_schema=False)
@@ -317,32 +371,17 @@ def create_app(registry: Registry, static_dir: Path = _STATIC_DIR, pricing: Pric
 
     @app.get("/api/sessions/{session_id}/summary", summary="Summarize a session by agent")
     def get_agent_summary(session_id: str) -> AgentSummaryOut:
-        try:
-            session, mtime = registry.session(session_id)
-        except KeyError as error:
-            raise HTTPException(status_code=404, detail=f"unknown session {session_id!r}") from error
-        except SessionUnavailable as error:
-            raise HTTPException(status_code=422, detail=str(error)) from error
+        session, mtime = analysed_session(registry, session_id)
         return agent_summary_out(session, mtime)
 
     @app.get("/api/sessions/{session_id}/diagnostics", summary="Inspect session parse diagnostics")
     def get_diagnostics(session_id: str) -> DiagnosticsDetailOut:
-        try:
-            session, _ = registry.session(session_id)
-        except KeyError as error:
-            raise HTTPException(status_code=404, detail=f"unknown session {session_id!r}") from error
-        except SessionUnavailable as error:
-            raise HTTPException(status_code=422, detail=str(error)) from error
+        session, _ = analysed_session(registry, session_id)
         return diagnostics_detail_out(session.diagnostics)
 
     @app.get("/api/sessions/{session_id}/findings", summary="List a session's findings by estimated cost and severity")
     def get_findings(session_id: str) -> list[FindingOut]:
-        try:
-            session, _ = registry.session(session_id)
-        except KeyError as error:
-            raise HTTPException(status_code=404, detail=f"unknown session {session_id!r}") from error
-        except SessionUnavailable as error:
-            raise HTTPException(status_code=422, detail=str(error)) from error
+        session, _ = analysed_session(registry, session_id)
         return _sorted_findings(session.root)
 
     @app.get("/api/sessions/{session_id}", response_model=SessionOut | ProjectedSessionOut)
@@ -360,12 +399,7 @@ def create_app(registry: Registry, static_dir: Path = _STATIC_DIR, pricing: Pric
             Query(description="Groups: session (identity and sources), diagnostics, tree (root); comma-separated."),
         ] = None,
     ) -> SessionOut | JSONResponse:
-        try:
-            session, mtime = registry.session(session_id)
-        except KeyError as error:
-            raise HTTPException(status_code=404, detail=f"unknown session {session_id!r}") from error
-        except SessionUnavailable as error:
-            raise HTTPException(status_code=422, detail=str(error)) from error
+        session, mtime = analysed_session(registry, session_id)
         return (
             session_out(session, mtime)
             if depth is None and fields is None
@@ -374,12 +408,7 @@ def create_app(registry: Registry, static_dir: Path = _STATIC_DIR, pricing: Pric
 
     @app.get("/api/sessions/{session_id}/nodes/{node_id}")
     def get_node(session_id: str, node_id: str) -> NodeDetailOut:
-        try:
-            session, _ = registry.session(session_id)
-        except KeyError as error:
-            raise HTTPException(status_code=404, detail=f"unknown session {session_id!r}") from error
-        except SessionUnavailable as error:
-            raise HTTPException(status_code=422, detail=str(error)) from error
+        session, _ = analysed_session(registry, session_id)
         node = next((node for node in iter_nodes(session.root) if node.node_id == node_id), None)
         if node is None:
             raise HTTPException(status_code=404, detail=f"unknown node {node_id!r}")
@@ -401,12 +430,7 @@ def create_app(registry: Registry, static_dir: Path = _STATIC_DIR, pricing: Pric
             raise HTTPException(status_code=422, detail="call_key and event_id are mutually exclusive")
         if (call_key is not None or event_id is not None) and node_id is None:
             raise HTTPException(status_code=422, detail="call_key and event_id require node_id")
-        try:
-            session, mtime = registry.session(session_id)
-        except KeyError as error:
-            raise HTTPException(status_code=404, detail=f"unknown session {session_id!r}") from error
-        except SessionUnavailable as error:
-            raise HTTPException(status_code=422, detail=str(error)) from error
+        session, mtime = analysed_session(registry, session_id)
         try:
             entries = scope_entries(session.root, node_id, call_key=call_key, event_id=event_id)
             page = page_entries(
@@ -440,12 +464,7 @@ def create_app(registry: Registry, static_dir: Path = _STATIC_DIR, pricing: Pric
 
     @app.get("/api/sessions/{session_id}/transcript/entries/{entry_id}", summary="Read one transcript entry")
     def get_transcript_entry(session_id: str, entry_id: str) -> TranscriptEntryDetailOut:
-        try:
-            session, _ = registry.session(session_id)
-        except KeyError as error:
-            raise HTTPException(status_code=404, detail=f"unknown session {session_id!r}") from error
-        except SessionUnavailable as error:
-            raise HTTPException(status_code=422, detail=str(error)) from error
+        session, _ = analysed_session(registry, session_id)
         entry = next(
             (
                 entry
@@ -469,12 +488,7 @@ def create_app(registry: Registry, static_dir: Path = _STATIC_DIR, pricing: Pric
     ) -> TranscriptSearchOut:
         if not q.strip():
             raise HTTPException(status_code=422, detail="q must not be blank")
-        try:
-            session, mtime = registry.session(session_id)
-        except KeyError as error:
-            raise HTTPException(status_code=404, detail=f"unknown session {session_id!r}") from error
-        except SessionUnavailable as error:
-            raise HTTPException(status_code=422, detail=str(error)) from error
+        session, mtime = analysed_session(registry, session_id)
         try:
             entries = scope_entries(session.root, node_id)
             hits = search_entries(entries, q)

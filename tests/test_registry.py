@@ -264,6 +264,25 @@ def test_session_that_cannot_be_analysed_raises_session_unavailable() -> None:
         registry.session("fake:a")
 
 
+def test_a_failed_analysis_is_remembered_until_the_file_changes() -> None:
+    adapter = FakeAdapter()
+    adapter.add("a", 100.0)
+    adapter.broken.add("a")
+    registry, _ = _registry(adapter)
+    registry.refresh()
+
+    for _ in range(2):
+        with pytest.raises(SessionUnavailable, match="broken file"):
+            registry.session("fake:a")
+    assert adapter.analyzed == ["a"]
+
+    adapter.broken.clear()
+    adapter.add("a", 200.0)
+    registry.refresh()
+    registry.session("fake:a")
+    assert adapter.analyzed == ["a", "a"]
+
+
 def test_resolve_accepts_prefixed_and_unambiguous_bare_ids() -> None:
     first, second = FakeAdapter("one"), FakeAdapter("two")
     first.add("a", 100.0)

@@ -20,7 +20,6 @@ from agentprof.adapters.claude_code.tools import is_known_tool_id
 from agentprof.adapters.claude_code.transcript import Transcript, load_transcript
 from agentprof.adapters.claude_code.tree import build_root, message_cost
 from agentprof.model import Diagnostics, Session, sum_costs
-from agentprof.pricing import PriceTable
 
 _TITLE_LENGTH = 80
 _SNIFF_LINES = 20
@@ -61,7 +60,7 @@ class ClaudeCodeAdapter:
     def __init__(self, config: AdapterConfig) -> None:
         override = config.roots.get(self.name)
         self._root = override if override is not None else default_projects_root(os.environ, Path.home())
-        self._prices = PriceTable.load(config.pricing_file)
+        self._prices = config.price_table()
 
     def _ref(self, path: Path) -> SessionRef:
         files = [path, *subagent_dir(path).glob("agent-*")]

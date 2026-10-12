@@ -25,6 +25,7 @@ from agentprof.server.app import create_app
 _DEFAULT_HOST = "127.0.0.1"
 _DEFAULT_PORT = 8765
 _WILDCARD_HOSTS = ("0.0.0.0", "::")
+_LOOPBACK_NAMES = frozenset({"localhost", "127.0.0.1", "::1"})
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -40,7 +41,7 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def adapter_config(args: argparse.Namespace) -> AdapterConfig:
+def adapter_config(args: argparse.Namespace, prices: PriceTable) -> AdapterConfig:
     roots: dict[str, Path] = {}
     if args.copilot_root is not None:
         roots["copilot-vscode"] = args.copilot_root
@@ -48,7 +49,7 @@ def adapter_config(args: argparse.Namespace) -> AdapterConfig:
         roots["claude-code"] = args.claude_root
     if args.codex_root is not None:
         roots["codex"] = args.codex_root
-    return AdapterConfig(roots=roots, pricing_file=args.pricing)
+    return AdapterConfig(roots=roots, pricing_file=args.pricing, prices=prices)
 
 
 def is_loopback(host: str) -> bool:
@@ -58,6 +59,13 @@ def is_loopback(host: str) -> bool:
         return ipaddress.ip_address(host).is_loopback
     except ValueError:
         return False
+
+
+def allowed_hosts(host: str) -> frozenset[str] | None:
+    """Host names the server answers to: the loopback names and the bound host; `None` (any) for a wildcard bind."""
+    if host in _WILDCARD_HOSTS:
+        return None
+    return _LOOPBACK_NAMES | {host.strip("[]").lower()}
 
 
 def browser_url(host: str, port: int, session_id: str | None) -> str:
@@ -102,8 +110,8 @@ def main(
     """Run agentprof until interrupted; returns the process exit code."""
     args = build_parser().parse_args(argv)
     try:
-        registry = Registry(load_adapters(adapter_config(args)))
         pricing = PriceTable.load(args.pricing)
+        registry = Registry(load_adapters(adapter_config(args, pricing)))
     except (OSError, ValueError) as error:  # e.g. an unreadable or invalid --pricing file
         print(f"error: {error}", file=sys.stderr)
         return 2
@@ -128,7 +136,7 @@ def main(
         if not args.no_browser:
             open_browser(url)
 
-    app = create_app(registry, pricing=pricing)
+    app = create_app(registry, pricing=pricing, allowed_hosts=allowed_hosts(args.host))
     print(f"agentprof: {url}", flush=True)
     registry.start()
     try:

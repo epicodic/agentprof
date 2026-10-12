@@ -8,8 +8,6 @@ from pydantic import BaseModel
 
 from agentprof.analysis.transcripts import TranscriptHit, preview, scope_coverage, supporting_references
 from agentprof.model import (
-    FindingReference,
-    Metric,
     Node,
     TranscriptAvailability,
     TranscriptBlock,
@@ -17,7 +15,7 @@ from agentprof.model import (
     TranscriptEntry,
     TranscriptKind,
 )
-from agentprof.server.schemas import FindingReferenceOut, MetricOut
+from agentprof.server.schemas import FindingReferenceOut, MetricOut, finding_reference_out, metric_out
 
 
 class TranscriptCoverageOut(BaseModel):
@@ -140,7 +138,7 @@ def transcript_detail_out(root: Node, entry: TranscriptEntry) -> TranscriptEntry
         invocation_id=entry.invocation_id,
         event_id=entry.event_id,
         subject_node_id=entry.subject_node_id,
-        references=[reference_out(reference) for reference in supporting_references(root, entry)],
+        references=[finding_reference_out(reference) for reference in supporting_references(root, entry)],
     )
 
 
@@ -169,17 +167,4 @@ def transcript_hit_out(hit: TranscriptHit) -> TranscriptSearchHitOut:
         timestamp=metric_out(entry.timestamp),
         block_position=hit.block_position,
         snippet=hit.snippet,
-    )
-
-
-def metric_out(metric: Metric) -> MetricOut:
-    return MetricOut(value=metric.value, provenance=metric.provenance.value)
-
-
-def reference_out(reference: FindingReference) -> FindingReferenceOut:
-    return FindingReferenceOut(
-        kind=reference.kind,
-        owner_id=reference.owner_id,
-        key=reference.key,
-        label=reference.label,
     )

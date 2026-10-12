@@ -14,7 +14,7 @@ from agentprof.adapters.claude_code.adapter import ClaudeCodeAdapter
 from agentprof.model import CostMetric, Finding, Metric, Provenance, iter_nodes
 from agentprof.pricing import PriceTable
 from agentprof.registry import EventKind, Registry, RegistryEvent
-from agentprof.server.app import Broadcaster, create_app, event_stream, format_event, static_file
+from agentprof.server.app import Broadcaster, create_app, event_stream, format_event, host_name, static_file
 
 _CLAUDE_PROJECTS = Path(__file__).parent.parent / "adapters" / "claude_code" / "fixtures" / "projects"
 _SESSION_ID = "claude-code:11111111-1111-4111-8111-111111111111"
@@ -487,3 +487,39 @@ def test_broadcaster_delivers_events_published_from_another_thread() -> None:
         return await asyncio.wait_for(queue.get(), timeout=2)
 
     assert asyncio.run(scenario()) == RegistryEvent(kind=EventKind.UPDATED, session_id="a")
+
+
+def test_host_name_strips_port_brackets_and_case() -> None:
+    assert host_name("localhost:8765") == "localhost"
+    assert host_name("127.0.0.1") == "127.0.0.1"
+    assert host_name("[::1]:8765") == "::1"
+    assert host_name("LocalHost") == "localhost"
+    assert host_name("[::1") is None
+    assert host_name("") is None
+
+
+def test_allowed_hosts_reject_requests_for_other_host_names() -> None:
+    app = create_app(_registry(), allowed_hosts={"localhost", "127.0.0.1", "::1"})
+
+    assert TestClient(app, base_url="http://localhost:8765").get("/api/sessions").status_code == 200
+    assert TestClient(app, base_url="http://127.0.0.1:8765").get("/api/sessions").status_code == 200
+    assert TestClient(app, base_url="http://[::1]:8765").get("/api/sessions").status_code == 200
+    rejected = TestClient(app, base_url="http://attacker.example").get("/api/sessions")
+    assert rejected.status_code == 400
+    assert rejected.text == "Invalid host header"
+
+
+def test_without_allowed_hosts_every_host_name_is_served() -> None:
+    assert TestClient(create_app(_registry())).get("/api/sessions").status_code == 200
+
+
+def test_allowed_hosts_are_case_insensitive() -> None:
+    app = create_app(_registry(), allowed_hosts={"LocalHost"})
+
+    assert TestClient(app, base_url="http://localhost:8765").get("/api/sessions").status_code == 200
+
+
+def test_allowed_hosts_also_guard_the_event_stream() -> None:
+    app = create_app(_registry(), allowed_hosts={"localhost"})
+
+    assert TestClient(app, base_url="http://attacker.example").get("/api/sessions/events").status_code == 400

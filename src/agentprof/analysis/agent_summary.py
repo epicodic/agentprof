@@ -1,9 +1,11 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 epicodic
 """Aggregate a session by owning agent without adding descendant cost to own cost."""
 
 from dataclasses import dataclass
 
 from agentprof.analysis.rollup import sum_tokens
-from agentprof.model import CostMetric, Metric, Node, NodeKind, Provenance, Tokens, sum_costs, worst_provenance
+from agentprof.model import CostMetric, Metric, Node, NodeKind, Tokens, extreme_metric, sum_costs, sum_metrics
 
 
 @dataclass(frozen=True)
@@ -44,27 +46,6 @@ def agent_ids(root: Node) -> dict[str, int]:
         agents.sort(key=lambda node: node.start.number())
     identities = dict.fromkeys(node.agent_uuid or node.node_id for node in agents)
     return {identity: index for index, identity in enumerate(identities, start=2)}
-
-
-def _sum_metrics(metrics: list[Metric]) -> Metric:
-    available = [metric for metric in metrics if metric.value is not None]
-    if not available:
-        return Metric.not_available()
-    provenance = worst_provenance(*(metric.provenance for metric in available))
-    if len(available) != len(metrics):
-        provenance = worst_provenance(provenance, Provenance.ESTIMATED)
-    return Metric(value=sum(metric.number() for metric in available), provenance=provenance)
-
-
-def _extreme(metrics: list[Metric], greatest: bool) -> Metric:
-    available = [metric for metric in metrics if metric.value is not None]
-    if not available:
-        return Metric.not_available()
-    chosen = (max if greatest else min)(available, key=Metric.number)
-    provenance = chosen.provenance
-    if len(available) != len(metrics):
-        provenance = worst_provenance(provenance, Provenance.ESTIMATED)
-    return Metric(value=chosen.value, provenance=provenance)
 
 
 def agent_groups(root: Node) -> list[AgentGroup]:
@@ -140,20 +121,22 @@ def agent_groups(root: Node) -> list[AgentGroup]:
                 parent_agent_id=next(iter(parent_ids)) if len(parent_ids) == 1 else None,
                 topic=representative.topic,
                 models=models,
-                llm_calls=_sum_metrics(counts),
+                llm_calls=sum_metrics(counts),
                 context_peak=(
-                    root.context_peak if agent_id == 1 else _extreme([node.context_peak for node in nodes], True)
+                    root.context_peak
+                    if agent_id == 1
+                    else extreme_metric([node.context_peak for node in nodes], greatest=True)
                 ),
                 tokens=sum_tokens([node.tokens for node in nodes]),
                 own_cost=sum_costs([node.cost_own for node in nodes]),
                 subtree_cost=sum_costs([node.cost_total for node in tops[agent_id]]),
-                start=_extreme([node.start for node in nodes], False),
-                end=_extreme([node.end for node in nodes], True),
+                start=extreme_metric([node.start for node in nodes], greatest=False),
+                end=extreme_metric([node.end for node in nodes], greatest=True),
                 cost_parts=cost_parts,
                 cache_ttl=cache_ttl,
                 cold_rewrites=Metric.exact(len(cold_calls)),
                 cold_rewrite_cost=sum_costs(cold_costs),
-                longest_gap=_extreme([call.gap for call in calls], True),
+                longest_gap=extreme_metric([call.gap for call in calls], greatest=True),
                 findings_count=finding_counts.get(agent_id, 0),
                 resume_count=sum(len(node.resume_times) for node in nodes),
             )

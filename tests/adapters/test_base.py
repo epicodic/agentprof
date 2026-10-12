@@ -4,7 +4,8 @@
 import os
 from pathlib import Path
 
-from agentprof.adapters.base import latest_mtime
+from agentprof.adapters.base import AdapterConfig, latest_mtime
+from agentprof.pricing import PriceTable
 
 
 def test_latest_mtime_is_the_newest_of_all_paths(tmp_path: Path) -> None:
@@ -24,3 +25,13 @@ def test_latest_mtime_ignores_missing_paths(tmp_path: Path) -> None:
 
     assert latest_mtime([existing, tmp_path / "missing"]) == 100.0
     assert latest_mtime([]) == 0.0
+
+
+def test_adapter_config_prefers_a_supplied_price_table() -> None:
+    table = PriceTable({}, usd_per_credit=0.5)
+
+    assert AdapterConfig(prices=table).price_table() is table
+
+
+def test_adapter_config_loads_the_bundled_price_table_by_default() -> None:
+    assert AdapterConfig().price_table().models

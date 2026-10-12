@@ -189,6 +189,7 @@ Findings:
 - A daemon thread re-runs `discover` every 3 s and summarises one pending row per `step()`, newest first.
 - The worker never analyses.
 - `session(id)` analyses on demand, deduplicates concurrent requests and keeps an LRU cache of 20 sessions keyed by mtime.
+- A failed analysis is remembered for the file version it failed on.
 - Every row change emits a `RegistryEvent` (`updated` or `removed`).
 - All public methods are thread-safe behind one `RLock`.
 
@@ -221,6 +222,7 @@ Behaviour:
 - Without `node_id`, transcript listing and search cover the whole session; with it, the node's ownership scope.
 - The `Broadcaster` moves registry events from the worker thread onto the asyncio loop, one queue per SSE client.
 - `/summary` `own_cost` can be summed across rows; `subtree_cost` cannot.
+- Requests whose `Host` header is not a loopback name or the bound host return 400 (protection against DNS rebinding); a wildcard bind (`0.0.0.0`, `::`) disables the check.
 
 ### Frontend (`frontend/`)
 
@@ -318,6 +320,7 @@ api/                client, query hooks, SSE, types
 ### CLI (`cli.py`)
 
 - Usage: `agentprof [SESSION|PATH] [--host] [--port] [--no-browser] [--copilot-root] [--claude-root] [--codex-root] [--pricing]`.
+- Loads the price table once and shares it with all adapters and the server.
 - Loads adapters, runs one `registry.refresh()` and resolves the optional argument (exit code 2 if unknown or ambiguous).
 - Starts the worker thread and uvicorn.
 - Opens the browser once the server accepts connections.

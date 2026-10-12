@@ -5,7 +5,6 @@
 Adapters set only what they know; these rules fill in the rest the same way for every agent.
 """
 
-from collections.abc import Callable
 from itertools import pairwise
 
 from agentprof.model import (
@@ -17,7 +16,9 @@ from agentprof.model import (
     Provenance,
     Tokens,
     context_size,
+    extreme_metric,
     sum_costs,
+    sum_metrics,
     worst_provenance,
 )
 
@@ -25,25 +26,15 @@ from agentprof.model import (
 _WORKER_KINDS = (NodeKind.TURN, NodeKind.AGENT)
 
 
-def _sum_metrics(metrics: list[Metric]) -> Metric:
-    available = [metric for metric in metrics if metric.value is not None]
-    if not available:
-        return Metric.not_available()
-    provenance = worst_provenance(*(metric.provenance for metric in available))
-    if len(available) < len(metrics):
-        provenance = worst_provenance(provenance, Provenance.ESTIMATED)
-    return Metric(value=sum(metric.number() for metric in available), provenance=provenance)
-
-
 def sum_tokens(tokens: list[Tokens]) -> Tokens:
     """Add token counts field by field."""
     return Tokens(
-        input=_sum_metrics([t.input for t in tokens]),
-        output=_sum_metrics([t.output for t in tokens]),
-        cache_read=_sum_metrics([t.cache_read for t in tokens]),
-        cache_write=_sum_metrics([t.cache_write for t in tokens]),
-        cache_write_5m=_sum_metrics([t.cache_write_5m for t in tokens]),
-        cache_write_1h=_sum_metrics([t.cache_write_1h for t in tokens]),
+        input=sum_metrics([t.input for t in tokens]),
+        output=sum_metrics([t.output for t in tokens]),
+        cache_read=sum_metrics([t.cache_read for t in tokens]),
+        cache_write=sum_metrics([t.cache_write for t in tokens]),
+        cache_write_5m=sum_metrics([t.cache_write_5m for t in tokens]),
+        cache_write_1h=sum_metrics([t.cache_write_1h for t in tokens]),
     )
 
 
@@ -58,21 +49,15 @@ def _call_end(call: LlmCall) -> Metric:
     )
 
 
-def _extreme(metrics: list[Metric], pick: Callable[..., Metric]) -> Metric:
-    available = [metric for metric in metrics if metric.value is not None]
-    if not available:
-        return Metric.not_available()
-    chosen = pick(available, key=Metric.number)
-    if len(available) < len(metrics):
-        return Metric(value=chosen.value, provenance=worst_provenance(chosen.provenance, Provenance.ESTIMATED))
-    return chosen
-
-
 def _roll_up_span(node: Node) -> None:
     if node.start.value is None:
-        node.start = _extreme([c.start for c in node.children] + [call.start for call in node.llm_calls], min)
+        node.start = extreme_metric(
+            [c.start for c in node.children] + [call.start for call in node.llm_calls], greatest=False
+        )
     if node.end.value is None:
-        derived_end = _extreme([c.end for c in node.children] + [_call_end(call) for call in node.llm_calls], max)
+        derived_end = extreme_metric(
+            [c.end for c in node.children] + [_call_end(call) for call in node.llm_calls], greatest=True
+        )
         node.end = Metric.estimated(derived_end.number()) if derived_end.value is not None else Metric.not_available()
     if node.duration.value is None and node.start.value is not None and node.end.value is not None:
         node.duration = Metric(

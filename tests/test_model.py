@@ -19,7 +19,9 @@ from agentprof.model import (
     ToolCategory,
     ToolInfo,
     context_size,
+    extreme_metric,
     iter_nodes,
+    sum_metrics,
     worst_provenance,
 )
 
@@ -199,3 +201,20 @@ def test_cost_converts_to_usd_with_its_rate() -> None:
 def test_cost_without_value_or_rate_has_no_usd() -> None:
     assert CostMetric.not_available().usd is None
     assert CostMetric(value=1.0, unit="credits", provenance=Provenance.EXACT).usd is None
+
+
+def test_sum_metrics_downgrades_to_estimated_when_values_are_missing() -> None:
+    assert sum_metrics([Metric.exact(1), Metric.exact(2)]) == Metric.exact(3)
+    assert sum_metrics([Metric.exact(1), Metric.not_available()]) == Metric.estimated(1)
+    assert sum_metrics([Metric.estimated(1), Metric.exact(2)]) == Metric.estimated(3)
+    assert sum_metrics([Metric.not_available()]) == Metric.not_available()
+    assert sum_metrics([]) == Metric.not_available()
+
+
+def test_extreme_metric_picks_the_largest_or_smallest_and_downgrades_when_values_are_missing() -> None:
+    metrics = [Metric.exact(3), Metric.estimated(5), Metric.exact(1)]
+
+    assert extreme_metric(metrics, greatest=True) == Metric.estimated(5)
+    assert extreme_metric(metrics, greatest=False) == Metric.exact(1)
+    assert extreme_metric([Metric.exact(2), Metric.not_available()], greatest=True) == Metric.estimated(2)
+    assert extreme_metric([], greatest=False) == Metric.not_available()

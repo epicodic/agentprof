@@ -25,7 +25,6 @@ from agentprof.adapters.copilot_vscode.tools import is_known_tool_id
 from agentprof.adapters.copilot_vscode.transcript import Transcript, load_transcript
 from agentprof.adapters.copilot_vscode.tree import build_root, credits_cost
 from agentprof.model import Diagnostics, Session, sum_costs
-from agentprof.pricing import PriceTable
 
 _TITLE_LENGTH = 80
 _LIVE_SESSION_DIR = "chatSessions"
@@ -47,7 +46,7 @@ class CopilotVscodeAdapter:
     name = "copilot-vscode"
 
     def __init__(self, config: AdapterConfig) -> None:
-        self._usd_per_credit = PriceTable.load(config.pricing_file).usd_per_credit
+        self._usd_per_credit = config.price_table().usd_per_credit
         override = config.roots.get(self.name)
         if override is not None:
             self._roots = [override]

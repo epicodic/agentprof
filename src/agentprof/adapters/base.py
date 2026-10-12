@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Protocol
 
 from agentprof.model import CostMetric, Session
+from agentprof.pricing import PriceTable
 
 
 def latest_mtime(paths: Iterable[Path]) -> float:
@@ -25,11 +26,17 @@ def latest_mtime(paths: Iterable[Path]) -> float:
 class AdapterConfig:
     """User configuration shared by all adapters.
 
-    `roots` maps an adapter name to an overriding data root; `pricing_file` replaces the bundled price table.
+    `roots` maps an adapter name to an overriding data root.
+    `prices` is the effective price table; without it, `pricing_file` (or the bundled table) is loaded.
     """
 
     roots: dict[str, Path] = field(default_factory=dict)
     pricing_file: Path | None = None
+    prices: PriceTable | None = None
+
+    def price_table(self) -> PriceTable:
+        """The effective price table: `prices` if given, else `pricing_file` or the bundled table."""
+        return self.prices if self.prices is not None else PriceTable.load(self.pricing_file)
 
 
 @dataclass(frozen=True)
