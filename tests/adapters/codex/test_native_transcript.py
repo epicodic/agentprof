@@ -10,6 +10,7 @@ from pathlib import Path
 from agentprof.adapters.codex.adapter import _merge_main_rollouts
 from agentprof.adapters.codex.rollout import load_rollout
 from agentprof.adapters.codex.tree import build_root
+from agentprof.analysis.session_index import SessionIndex
 from agentprof.model import Node, NodeKind, TranscriptEntry, iter_nodes
 from agentprof.pricing import PriceTable
 from agentprof.server.transcript_schema import transcript_detail_out
@@ -162,7 +163,7 @@ def test_agent_message_participant_metadata_does_not_replace_structured_content(
     )
     root = build_root(load_rollout(path), [], PriceTable.load(), "session")
     entry = _entries(root)[0]
-    detail = transcript_detail_out(root, entry)
+    detail = transcript_detail_out(SessionIndex(root), entry)
 
     assert (detail.sender, detail.recipient) == ("/root/task", "/root")
     assert detail.blocks[0].availability == "unsupported"

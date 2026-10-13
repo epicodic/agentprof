@@ -76,7 +76,7 @@ class CodexAdapter:
     def _files_for_id(self, session_id: str) -> SessionFiles | None:
         return next((files for files in session_files(self._root) if files.session_id == session_id), None)
 
-    def _load(self, ref: SessionRef) -> tuple[SessionFiles, Rollout, list[Rollout]]:
+    def _load(self, ref: SessionRef, *, retain_native: bool = True) -> tuple[SessionFiles, Rollout, list[Rollout]]:
         files = self._files_for_id(ref.native_id)
         if files is None:
             metadata = read_metadata(ref.path)
@@ -85,9 +85,13 @@ class CodexAdapter:
             files = SessionFiles(metadata.session_id, ref.path, [ref.path], [metadata])
         roots = [rollout.path for rollout in files.rollouts if rollout.parent_thread_id is None]
         main_paths = roots or [ref.path]
-        main = _merge_main_rollouts([load_rollout(path, self._root) for path in main_paths])
+        main = _merge_main_rollouts(
+            [load_rollout(path, self._root, retain_native=retain_native) for path in main_paths]
+        )
         subagents = [
-            load_rollout(rollout.path, self._root) for rollout in files.rollouts if rollout.path not in main_paths
+            load_rollout(rollout.path, self._root, retain_native=retain_native)
+            for rollout in files.rollouts
+            if rollout.path not in main_paths
         ]
         return files, main, subagents
 
@@ -105,7 +109,7 @@ class CodexAdapter:
         return SessionRef(agent=self.name, native_id=metadata.session_id, path=path, mtime=latest_mtime([path]))
 
     def summarize(self, ref: SessionRef) -> SessionSummary:
-        files, main, subagents = self._load(ref)
+        files, main, subagents = self._load(ref, retain_native=False)
         rollouts = [main, *subagents]
         start_ms = next((turn.start_ms for turn in main.turns if turn.start_ms is not None), None)
         return SessionSummary(

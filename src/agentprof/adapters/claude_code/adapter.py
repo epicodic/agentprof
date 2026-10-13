@@ -76,8 +76,8 @@ class ClaudeCodeAdapter:
         return self._ref(path) if _looks_like_session(path) else None
 
     def summarize(self, ref: SessionRef) -> SessionSummary:
-        main = load_transcript(ref.path)
-        transcripts = [main, *(subagent.transcript for subagent in load_subagents(ref.path))]
+        main = load_transcript(ref.path, retain_native=False)
+        transcripts = [main, *(subagent.transcript for subagent in load_subagents(ref.path, retain_native=False))]
         return SessionSummary(
             id=ref.id,
             agent=self.name,

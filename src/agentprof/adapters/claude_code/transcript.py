@@ -168,7 +168,13 @@ def _blocks(content: object) -> list[dict[str, Any]]:
 
 
 class _Parser:
-    def __init__(self, source_stream_id: str | None = None, native_source_stream_id: str | None = None) -> None:
+    def __init__(
+        self,
+        source_stream_id: str | None = None,
+        native_source_stream_id: str | None = None,
+        *,
+        retain_native: bool = True,
+    ) -> None:
         self.transcript = Transcript()
         self.transcript.source_stream_id = source_stream_id
         self.transcript.native_source_stream_id = native_source_stream_id
@@ -176,11 +182,12 @@ class _Parser:
         self._seen_tool_uses: set[str] = set()
         self._pending_next_calls: list[ToolResult] = []
         self._source_order = 0
+        self._retain_native_records = retain_native
 
     def feed(self, entry: dict[str, Any], physical_position: int | None = None) -> None:
         source_order = self._source_order
         self._source_order += 1
-        if physical_position is not None:
+        if physical_position is not None and self._retain_native_records:
             self._retain_native(entry, physical_position, source_order)
         entry_type = entry.get("type")
         if entry_type == "ai-title":
@@ -433,14 +440,18 @@ class _Parser:
         )
 
 
-def load_transcript(path: Path) -> Transcript:
-    """Parse one transcript file; malformed lines are skipped and counted."""
+def load_transcript(path: Path, *, retain_native: bool = True) -> Transcript:
+    """Parse one transcript file; malformed lines are skipped and counted.
+
+    `retain_native=False` skips `native_records`, the transcript entries only `analyze` needs.
+    """
     logical_stream_id = f"claude-code:{path.stem}"
     source_parts = path.parts[-4:] if path.parent.name == "subagents" else path.parts[-2:]
     relative_source = "/".join(source_parts)
     parser = _Parser(
         source_stream_id=logical_stream_id,
         native_source_stream_id=f"claude-code-source:{relative_source}",
+        retain_native=retain_native,
     )
     with path.open(encoding="utf-8") as source:
         for line_number, line in enumerate(source, start=1):

@@ -25,6 +25,7 @@ class FakeAdapter:
         self.broken: set[str] = set()
         self.summarized: list[str] = []
         self.analyzed: list[str] = []
+        self.sizes: dict[str, int] = {}
 
     def add(self, native_id: str, mtime: float) -> None:
         self.refs[native_id] = SessionRef(
@@ -48,7 +49,7 @@ class FakeAdapter:
             workspace=None,
             start_ms=0,
             end_ms=0,
-            file_size=1,
+            file_size=self.sizes.get(ref.native_id, 1),
             cost_total=CostMetric(value=0.5, unit="USD", provenance=Provenance.ESTIMATED),
         )
 
@@ -514,3 +515,147 @@ def test_a_failure_of_a_session_that_vanished_meanwhile_is_not_remembered() -> N
     registry.refresh()
     registry.session("fake:a")
     assert adapter.analyzed == ["a", "a"]
+
+
+def test_session_cache_evicts_beyond_its_byte_budget() -> None:
+    adapter = FakeAdapter()
+    adapter.add("a", 100.0)
+    adapter.add("b", 200.0)
+    adapter.sizes = {"a": 60, "b": 60}
+    registry = Registry([adapter], cache_bytes=100)
+    registry.refresh()
+    _drain(registry)
+
+    registry.session("fake:a")
+    registry.session("fake:b")
+    registry.session("fake:b")
+    registry.session("fake:a")
+
+    assert adapter.analyzed == ["a", "b", "a"]
+
+
+def test_the_most_recent_analysis_stays_cached_above_the_byte_budget() -> None:
+    adapter = FakeAdapter()
+    adapter.add("a", 100.0)
+    adapter.sizes = {"a": 500}
+    registry = Registry([adapter], cache_bytes=100)
+    registry.refresh()
+    _drain(registry)
+
+    registry.session("fake:a")
+    registry.session("fake:a")
+
+    assert adapter.analyzed == ["a"]
+
+
+def _clocked_registry(adapter: FakeAdapter, now: list[float]) -> tuple[Registry, list[RegistryEvent]]:
+    registry = Registry([adapter], reanalysis_interval_s=10.0, clock=lambda: now[0])
+    events: list[RegistryEvent] = []
+    registry.subscribe(events.append)
+    return registry, events
+
+
+def test_a_changing_session_is_reanalysed_at_most_once_per_interval() -> None:
+    now = [0.0]
+    adapter = FakeAdapter()
+    adapter.add("a", 100.0)
+    registry, events = _clocked_registry(adapter, now)
+    registry.refresh()
+    registry.session("fake:a")
+    adapter.add("a", 200.0)
+    registry.refresh()
+    events.clear()
+
+    now[0] = 5.0
+    _, mtime = registry.session("fake:a")
+    registry.release_held()
+
+    assert mtime == 100.0
+    assert adapter.analyzed == ["a"]
+    assert events == []
+
+    now[0] = 10.0
+    registry.release_held()
+
+    assert events == [RegistryEvent(kind=EventKind.UPDATED, session_id="fake:a")]
+    _, mtime = registry.session("fake:a")
+    assert mtime == 200.0
+    assert adapter.analyzed == ["a", "a"]
+
+    events.clear()
+    registry.release_held()
+    assert events == []
+
+
+def test_a_session_analysed_long_ago_is_reanalysed_at_once() -> None:
+    now = [0.0]
+    adapter = FakeAdapter()
+    adapter.add("a", 100.0)
+    registry, _ = _clocked_registry(adapter, now)
+    registry.refresh()
+    registry.session("fake:a")
+    adapter.add("a", 200.0)
+    registry.refresh()
+
+    now[0] = 60.0
+    _, mtime = registry.session("fake:a")
+
+    assert mtime == 200.0
+    assert adapter.analyzed == ["a", "a"]
+
+
+def test_a_removed_session_is_not_released() -> None:
+    now = [0.0]
+    adapter = FakeAdapter()
+    adapter.add("a", 100.0)
+    registry, events = _clocked_registry(adapter, now)
+    registry.refresh()
+    registry.session("fake:a")
+    adapter.add("a", 200.0)
+    registry.refresh()
+    now[0] = 5.0
+    registry.session("fake:a")
+    del adapter.refs["a"]
+    registry.refresh()
+    events.clear()
+
+    now[0] = 20.0
+    registry.release_held()
+
+    assert events == []
+
+
+def test_a_hold_is_not_released_again_after_the_session_was_analysed() -> None:
+    now = [0.0]
+    adapter = FakeAdapter()
+    adapter.add("a", 100.0)
+    registry, events = _clocked_registry(adapter, now)
+    registry.refresh()
+    registry.session("fake:a")
+    adapter.add("a", 200.0)
+    registry.refresh()
+    now[0] = 5.0
+    registry.session("fake:a")
+    now[0] = 12.0
+    _, mtime = registry.session("fake:a")
+    events.clear()
+
+    now[0] = 30.0
+    registry.release_held()
+
+    assert mtime == 200.0
+    assert events == []
+
+
+def test_the_default_registry_reanalyses_at_once() -> None:
+    adapter = FakeAdapter()
+    adapter.add("a", 100.0)
+    registry, _ = _registry(adapter)
+    registry.refresh()
+    registry.session("fake:a")
+    adapter.add("a", 200.0)
+    registry.refresh()
+
+    _, mtime = registry.session("fake:a")
+
+    assert mtime == 200.0

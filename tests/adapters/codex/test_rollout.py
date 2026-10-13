@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 epicodic
 
+from dataclasses import replace
 from pathlib import Path
 
 from agentprof.adapters.codex.rollout import UsageRecord, load_rollout
@@ -117,3 +118,12 @@ def test_load_rollout_skips_invalid_utf8_lines_after_valid_records(tmp_path: Pat
     assert rollout.session_id == "session"
     assert [turn.turn_id for turn in rollout.turns] == ["turn"]
     assert rollout.malformed_lines == 1
+
+
+def test_load_rollout_without_native_records_keeps_everything_else() -> None:
+    full = load_rollout(_ROOT)
+    light = load_rollout(_ROOT, retain_native=False)
+
+    assert full.native_records
+    assert light.native_records == []
+    assert light == replace(full, native_records=[])
