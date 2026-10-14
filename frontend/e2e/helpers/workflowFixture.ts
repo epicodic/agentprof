@@ -159,7 +159,7 @@ export async function installDeepWorkflow(
         await route.abort("failed");
         return;
       }
-      await route.fulfill({ response: await route.fetch() });
+      await route.continue();
       return;
     }
     await route.fallback();
