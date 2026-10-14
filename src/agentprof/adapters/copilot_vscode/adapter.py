@@ -10,6 +10,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 from agentprof.adapters.base import AdapterConfig, SessionRef, SessionSummary, latest_mtime
+from agentprof.adapters.common import title_from_prompts
 from agentprof.adapters.copilot_vscode.debuglog import DebugLog, load_debug_log_dir
 from agentprof.adapters.copilot_vscode.discovery import (
     SideFiles,
@@ -26,18 +27,11 @@ from agentprof.adapters.copilot_vscode.transcript import Transcript, load_transc
 from agentprof.adapters.copilot_vscode.tree import build_root, credits_cost
 from agentprof.model import Diagnostics, Session, sum_costs
 
-_TITLE_LENGTH = 80
 _LIVE_SESSION_DIR = "chatSessions"
 
 
 def _title(raw: RawSession, fallback: str) -> str:
-    if raw.title:
-        return raw.title
-    for request in raw.requests:
-        first_line = request.text.strip().splitlines()[0] if request.text.strip() else ""
-        if first_line:
-            return first_line[:_TITLE_LENGTH]
-    return fallback
+    return raw.title or title_from_prompts((request.text for request in raw.requests), fallback)
 
 
 class CopilotVscodeAdapter:
@@ -130,6 +124,7 @@ class CopilotVscodeAdapter:
             transcript = load_transcript(side.transcript_file)
             sources.append("transcript")
             diagnostics.malformed_lines += transcript.malformed_lines
+            diagnostics.malformed_line_details.extend(transcript.malformed_line_details)
         else:
             diagnostics.warnings.append("No transcript found: tool timings and LLM call counts are unavailable.")
 
@@ -138,6 +133,7 @@ class CopilotVscodeAdapter:
             debug_log = load_debug_log_dir(side.debug_log_dir, root_session_id=side.debug_log_dir.name)
             sources.append("debug-log")
             diagnostics.malformed_lines += debug_log.malformed_lines
+            diagnostics.malformed_line_details.extend(debug_log.malformed_line_details)
         else:
             diagnostics.warnings.append("No debug log found: token counts are unavailable.")
 

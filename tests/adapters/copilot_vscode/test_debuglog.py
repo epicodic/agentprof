@@ -44,6 +44,11 @@ def test_load_debug_log_dir_skips_and_counts_malformed_lines(tmp_path: Path) -> 
     log = load_debug_log_dir(directory, root_session_id="root_session")
 
     assert log.malformed_lines == 3
+    assert sorted(detail.error_category for detail in log.malformed_line_details) == [
+        "invalid_json",
+        "missing_field",
+        "non_object",
+    ]
     assert len(log.calls[None]) == 1
 
 

@@ -3,6 +3,7 @@
 """Build neutral session trees from Codex rollout records."""
 
 import json
+from dataclasses import dataclass
 
 from agentprof.adapters.codex.prompts import prompt_topic
 from agentprof.adapters.codex.rollout import NativeRecord, Rollout, ToolCall, Turn, UsageRecord
@@ -316,15 +317,7 @@ def _attach_native_records(
     delegation_subjects: dict[tuple[int, str], list[str]],
 ) -> None:
     """Attach retained source items after active-task ownership and agent nesting are known."""
-    root.transcript_coverage.source_present = main.source_present
-    for rollout in subagents:
-        agent = agents.get(id(rollout))
-        if agent is not None:
-            agent.transcript_coverage.source_present = rollout.source_present
-    for turn in main.turns:
-        owner = turn_nodes.get((turn.native_source_stream_id, turn.turn_id))
-        if owner is not None:
-            owner.transcript_coverage.source_present = turn.source_present
+    _set_source_presence(root, main, subagents, agents, turn_nodes)
     event_index: dict[tuple[str | None, str], list[ExecutionEvent]] = {}
     invocation_subjects: dict[tuple[str, str], str] = {}
     invocation_occurrences: dict[tuple[str, str], int] = {}
@@ -342,53 +335,16 @@ def _attach_native_records(
             if event.event_id is not None:
                 event_index.setdefault((event.source_stream_id, event.event_id), []).append(event)
 
+    lookups = _EventLookups(event_index, node_by_id, invocation_occurrences, invocation_subjects, delegation_subjects)
     for rollout, agent in [(main, None), *((rollout, agents.get(id(rollout))) for rollout in subagents)]:
         for record in rollout.native_records:
             owner = agent or turn_nodes.get((record.source_stream_id, record.owner_turn_id), root)
             blocks = record.blocks or [TranscriptBlock(kind="message")]
             for block_position, block in enumerate(blocks):
                 entry = _transcript_entry(record, block, block_position, owner)
-                event_id: str | None = None
-                if entry.kind == "user_message" and record.native_id is not None:
-                    event_id = f"user-input:{record.native_id}"
-                elif entry.kind == "compaction" and record.event_id is not None:
-                    event_id = record.event_id
-                elif entry.invocation_id is not None and entry.kind in {"tool_request", "tool_result", "delegation"}:
-                    prefix = "tool-result" if entry.kind == "tool_result" else "tool-start"
-                    event_id = f"{prefix}:{entry.invocation_id}"
-                candidates = event_index.get((record.logical_stream_id, event_id), []) if event_id else []
-                exact = [candidate for candidate in candidates if candidate.source_order == record.source_order]
-                if len(exact) == 1:
-                    entry.event_id = exact[0].event_id
-                    subject_id = exact[0].subject_node_id
-                    subject_candidates = node_by_id.get(subject_id or "", [])
-                    subject = subject_candidates[0] if len(subject_candidates) == 1 else None
-                    invocation_key = (record.source_stream_id, entry.invocation_id or "")
-                    invocation_unique = invocation_occurrences.get(invocation_key) == 1
-                    if subject is not None and (entry.invocation_id is None or invocation_unique):
-                        entry.subject_node_id = subject.node_id
-                    if entry.kind == "delegation" and entry.invocation_id is not None and invocation_unique:
-                        matches = delegation_subjects.get((id(owner), entry.invocation_id), [])
-                        if len(matches) == 1 and len(node_by_id.get(matches[0], [])) == 1:
-                            entry.subject_node_id = matches[0]
-                    elif entry.kind == "tool_result" and entry.invocation_id is not None and invocation_unique:
-                        entry.subject_node_id = invocation_subjects.get((record.source_stream_id, entry.invocation_id))
-                    if entry.invocation_id is not None and entry.subject_node_id is not None:
-                        invocation_subjects[(record.source_stream_id, entry.invocation_id)] = entry.subject_node_id
+                _link_execution_event(entry, record, owner, lookups)
                 owner.transcript_entries.append(entry)
-                coverage = owner.transcript_coverage
-                coverage.source_present = True
-                if entry.kind not in coverage.categories:
-                    coverage.categories.append(entry.kind)
-                if entry.timestamp.value is None and "missing_timestamps" not in coverage.reasons:
-                    coverage.reasons.append("missing_timestamps")
-                reason = {
-                    "encrypted": "encrypted_content",
-                    "unsupported": "unsupported_content",
-                    "unavailable": "unavailable_content",
-                }.get(block.availability)
-                if reason is not None and reason not in coverage.reasons:
-                    coverage.reasons.append(reason)
+                _add_entry_coverage(owner, entry, block)
         if rollout.malformed_lines:
             owner = agent or root
             owner.transcript_coverage.source_present = True
@@ -398,6 +354,94 @@ def _attach_native_records(
         node.transcript_entries.sort(
             key=lambda entry: (entry.source_stream_id, entry.source_position, entry.block_position)
         )
+    _attach_terminal_results(main, subagents, agents, turn_nodes, root)
+
+
+@dataclass(frozen=True)
+class _EventLookups:
+    """Indexes used to link a transcript entry to its execution event and subject node.
+
+    `invocation_subjects` is updated in place as entries are linked.
+    """
+
+    event_index: dict[tuple[str | None, str], list[ExecutionEvent]]
+    node_by_id: dict[str, list[Node]]
+    invocation_occurrences: dict[tuple[str, str], int]
+    invocation_subjects: dict[tuple[str, str], str]
+    delegation_subjects: dict[tuple[int, str], list[str]]
+
+
+def _set_source_presence(
+    root: Node,
+    main: Rollout,
+    subagents: list[Rollout],
+    agents: dict[int, Node],
+    turn_nodes: dict[tuple[str | None, str], Node],
+) -> None:
+    root.transcript_coverage.source_present = main.source_present
+    for rollout in subagents:
+        agent = agents.get(id(rollout))
+        if agent is not None:
+            agent.transcript_coverage.source_present = rollout.source_present
+    for turn in main.turns:
+        owner = turn_nodes.get((turn.native_source_stream_id, turn.turn_id))
+        if owner is not None:
+            owner.transcript_coverage.source_present = turn.source_present
+
+
+def _link_execution_event(entry: TranscriptEntry, record: NativeRecord, owner: Node, lookups: _EventLookups) -> None:
+    event_id: str | None = None
+    if entry.kind == "user_message" and record.native_id is not None:
+        event_id = f"user-input:{record.native_id}"
+    elif entry.kind == "compaction" and record.event_id is not None:
+        event_id = record.event_id
+    elif entry.invocation_id is not None and entry.kind in {"tool_request", "tool_result", "delegation"}:
+        prefix = "tool-result" if entry.kind == "tool_result" else "tool-start"
+        event_id = f"{prefix}:{entry.invocation_id}"
+    candidates = lookups.event_index.get((record.logical_stream_id, event_id), []) if event_id else []
+    exact = [candidate for candidate in candidates if candidate.source_order == record.source_order]
+    if len(exact) == 1:
+        entry.event_id = exact[0].event_id
+        subject_id = exact[0].subject_node_id
+        subject_candidates = lookups.node_by_id.get(subject_id or "", [])
+        subject = subject_candidates[0] if len(subject_candidates) == 1 else None
+        invocation_key = (record.source_stream_id, entry.invocation_id or "")
+        invocation_unique = lookups.invocation_occurrences.get(invocation_key) == 1
+        if subject is not None and (entry.invocation_id is None or invocation_unique):
+            entry.subject_node_id = subject.node_id
+        if entry.kind == "delegation" and entry.invocation_id is not None and invocation_unique:
+            matches = lookups.delegation_subjects.get((id(owner), entry.invocation_id), [])
+            if len(matches) == 1 and len(lookups.node_by_id.get(matches[0], [])) == 1:
+                entry.subject_node_id = matches[0]
+        elif entry.kind == "tool_result" and entry.invocation_id is not None and invocation_unique:
+            entry.subject_node_id = lookups.invocation_subjects.get((record.source_stream_id, entry.invocation_id))
+        if entry.invocation_id is not None and entry.subject_node_id is not None:
+            lookups.invocation_subjects[(record.source_stream_id, entry.invocation_id)] = entry.subject_node_id
+
+
+def _add_entry_coverage(owner: Node, entry: TranscriptEntry, block: TranscriptBlock) -> None:
+    coverage = owner.transcript_coverage
+    coverage.source_present = True
+    if entry.kind not in coverage.categories:
+        coverage.categories.append(entry.kind)
+    if entry.timestamp.value is None and "missing_timestamps" not in coverage.reasons:
+        coverage.reasons.append("missing_timestamps")
+    reason = {
+        "encrypted": "encrypted_content",
+        "unsupported": "unsupported_content",
+        "unavailable": "unavailable_content",
+    }.get(block.availability)
+    if reason is not None and reason not in coverage.reasons:
+        coverage.reasons.append(reason)
+
+
+def _attach_terminal_results(
+    main: Rollout,
+    subagents: list[Rollout],
+    agents: dict[int, Node],
+    turn_nodes: dict[tuple[str | None, str], Node],
+    root: Node,
+) -> None:
     for rollout, agent in [(main, None), *((rollout, agents.get(id(rollout))) for rollout in subagents)]:
         terminal_by_owner: dict[int, tuple[int, Node, str]] = {}
         for record in rollout.native_records:

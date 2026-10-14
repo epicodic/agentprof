@@ -8,14 +8,12 @@ from pathlib import Path
 
 from agentprof.adapters.base import AdapterConfig, SessionRef, SessionSummary, latest_mtime
 from agentprof.adapters.codex.discovery import SessionFiles, default_sessions_root, read_metadata, session_files
-from agentprof.adapters.codex.prompts import first_line
 from agentprof.adapters.codex.rollout import Rollout, load_rollout
 from agentprof.adapters.codex.tools import is_known_tool_id
 from agentprof.adapters.codex.tree import build_root, usage_cost
+from agentprof.adapters.common import title_from_prompts
 from agentprof.model import CostMetric, Diagnostics, Session, sum_costs
 from agentprof.pricing import PriceTable
-
-_TITLE_LENGTH = 80
 
 
 def _merge_main_rollouts(rollouts: list[Rollout]) -> Rollout:
@@ -27,6 +25,7 @@ def _merge_main_rollouts(rollouts: list[Rollout]) -> Rollout:
         main.turns.extend(continuation.turns)
         main.native_records.extend(continuation.native_records)
         main.malformed_lines += continuation.malformed_lines
+        main.malformed_line_details.extend(continuation.malformed_line_details)
         main.source_present = main.source_present or continuation.source_present
         if continuation.last_message_ms is not None:
             main.last_message_ms = max(
@@ -38,10 +37,7 @@ def _merge_main_rollouts(rollouts: list[Rollout]) -> Rollout:
 
 def _title(main: Rollout, fallback: str) -> str:
     """Return the first root-user prompt topic, or the stable native id."""
-    for turn in main.turns:
-        if turn.prompt:
-            return first_line(turn.prompt, _TITLE_LENGTH) or fallback
-    return fallback
+    return title_from_prompts((turn.prompt for turn in main.turns if turn.prompt), fallback)
 
 
 def _costs(rollouts: list[Rollout], prices: PriceTable) -> list[CostMetric]:
@@ -131,6 +127,9 @@ class CodexAdapter:
         _, main, subagents = self._load(ref)
         rollouts = [main, *subagents]
         diagnostics = Diagnostics(malformed_lines=sum(rollout.malformed_lines for rollout in rollouts))
+        diagnostics.malformed_line_details = [
+            detail for rollout in rollouts for detail in rollout.malformed_line_details
+        ]
         diagnostics.unknown_tool_ids = dict(
             Counter(
                 tool.name
