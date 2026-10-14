@@ -19,6 +19,22 @@ class Provenance(StrEnum):
 
 _PROVENANCE_RANK = {Provenance.EXACT: 0, Provenance.ESTIMATED: 1, Provenance.NOT_AVAILABLE: 2}
 
+TimingBasis = Literal["request_start", "assistant_message", "usage_report", "turn_start", "unknown"]
+ExecutionEventKind = Literal[
+    "user_input",
+    "tool_start",
+    "tool_result",
+    "delegation",
+    "child_completion",
+    "completion",
+    "message",
+    "resume",
+    "compaction",
+]
+CallLinkRelation = Literal["requested_by", "consumed_by", "next_observed_call"]
+CallLinkEvidence = Literal["recorded", "observed_order"]
+FindingReferenceKind = Literal["node", "call", "event"]
+
 
 def worst_provenance(*provenances: Provenance) -> Provenance:
     """Return the least trustworthy of `provenances`; `EXACT` if none are given."""
@@ -134,8 +150,8 @@ class EventCallLink:
     """A link between an execution event and a model request."""
 
     source_request_id: str
-    relation: Literal["requested_by", "consumed_by", "next_observed_call"]
-    evidence: Literal["recorded", "observed_order"]
+    relation: CallLinkRelation
+    evidence: CallLinkEvidence
     owner_id: str | None = None
 
 
@@ -147,17 +163,7 @@ class ExecutionEvent:
     `execution_start` and `execution_end` retain the original invocation snapshot separately.
     """
 
-    kind: Literal[
-        "user_input",
-        "tool_start",
-        "tool_result",
-        "delegation",
-        "child_completion",
-        "completion",
-        "message",
-        "resume",
-        "compaction",
-    ]
+    kind: ExecutionEventKind
     event_id: str | None = None
     subject_node_id: str | None = None
     start: Metric = field(default_factory=Metric.not_available)
@@ -206,7 +212,7 @@ class LlmCall:
     source_request_id: str | None = None
     source_order: int | None = None
     source_stream_id: str | None = None
-    timing_basis: Literal["request_start", "assistant_message", "usage_report", "turn_start", "unknown"] = "unknown"
+    timing_basis: TimingBasis = "unknown"
     call_key: str | None = None
 
 
@@ -274,7 +280,7 @@ class NodeKind(StrEnum):
 class FindingReference:
     """A stable reference to a node, model call, or execution event supporting a finding."""
 
-    kind: Literal["node", "call", "event"]
+    kind: FindingReferenceKind
     owner_id: str
     key: str
     label: str

@@ -38,8 +38,6 @@ from agentprof.server.schemas import (
     SessionOut,
     SummaryOut,
     agent_summary_out,
-    diagnostics_detail_out,
-    finding_out,
     node_detail_out,
     projected_session_out,
     session_out,
@@ -304,12 +302,12 @@ def create_app(
     @app.get("/api/sessions/{session_id}/diagnostics", summary="Inspect session parse diagnostics")
     def get_diagnostics(session_id: str) -> DiagnosticsDetailOut:
         analysed = analysed_session(registry, session_id)
-        return diagnostics_detail_out(analysed.session.diagnostics)
+        return DiagnosticsDetailOut.model_validate(analysed.session.diagnostics)
 
     @app.get("/api/sessions/{session_id}/findings", summary="List a session's findings by estimated cost and severity")
     def get_findings(session_id: str) -> list[FindingOut]:
         analysed = analysed_session(registry, session_id)
-        return [finding_out(finding) for finding in ordered_findings(analysed.session.root)]
+        return [FindingOut.model_validate(finding) for finding in ordered_findings(analysed.session.root)]
 
     @app.get("/api/sessions/{session_id}", response_model=SessionOut | ProjectedSessionOut)
     def get_session(

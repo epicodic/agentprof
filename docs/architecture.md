@@ -37,7 +37,7 @@ src/agentprof/
     transcripts.py        # transcript scoping, ordering, paging and search
   server/
     app.py                # FastAPI app, SSE broadcaster, static file serving
-    schemas.py            # response models + mapping from the neutral model
+    schemas.py            # response models; mirror models validate from the neutral model
     transcript_schema.py  # transcript response models
     pricing_schema.py     # price-table response model
     openapi.py            # dumps the OpenAPI schema for frontend type generation
@@ -400,7 +400,10 @@ file changes -> worker emits "updated" with newer mtime -> frontend refetches th
 
 ### Change the API
 
-1. Change the model and its mapping in `server/schemas.py` (transcripts: `server/transcript_schema.py`).
+1. Change the response model in `server/schemas.py` (transcripts: `server/transcript_schema.py`).
+   A model that mirrors a neutral-model dataclass inherits `_FromModel` and needs no mapping code: give it the same field names and Pydantic reads them from the object.
+   Write explicit mapping code only where the API differs, as in `node_out`, `summary_out` and the transcript responses.
+   Shared `Literal`s live in `model.py`.
 2. Run `pnpm --dir frontend gen:api` and commit `frontend/src/api/schema.ts`; CI checks that it is current.
 3. Update `frontend/src/test/factories.ts` if test data changes shape.
 
