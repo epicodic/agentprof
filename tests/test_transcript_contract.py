@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 epicodic
-"""Exercise recorded transcripts through each native adapter and the public API."""
+"""Cross-adapter transcript contract: scope, ownership, accounting and stable entry ids through the API."""
 
 import json
 import os
