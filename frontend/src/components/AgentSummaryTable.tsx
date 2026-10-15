@@ -12,7 +12,6 @@ import {
   useReactTable,
 } from "@tanstack/react-table";
 import { useMemo, useRef } from "react";
-import { useLocation } from "react-router";
 import type { AgentSummaryRowOut, CostOut, MetricOut, NodeOut } from "../api/types";
 import { useRememberedState } from "../hooks/useRememberedState";
 import { agentNode, callRef, eventRef, relationsToNodes } from "../lib/entities";
@@ -361,7 +360,6 @@ export function AgentSummaryTable({
   hierarchyMatchCount?: number;
 }) {
   const isPhone = useMediaQuery("(max-width: 48em)");
-  const routerLocation = useLocation();
   const nodesByAgent = useMemo(() => {
     const nodes = new Map<number, NodeOut>();
     for (const agent of agents) {
@@ -408,9 +406,7 @@ export function AgentSummaryTable({
   interactionRef.current = interaction;
   const saveCurrentSnapshot = () => {
     if (interaction?.restoringHistory) return;
-    const historyState = typeof window === "undefined" ? null : (window.history.state as { key?: string } | null);
-    const browserKey = historyState?.key ?? "default";
-    if (browserKey === routerLocation.key) interactionRef.current?.saveSnapshot();
+    interactionRef.current?.saveSnapshot();
   };
   const [sorting, updateSorting] = useRememberedState<SortingState>(
     "agent-summary:sorting",

@@ -16,3 +16,9 @@ export function isRestoringHistory(state: {
     (state.navigationType === "POP" && state.key !== state.lastKey && state.hasSnapshot)
   );
 }
+
+/** The router key of a browser history entry's state; React Router's first entry has none and is `"default"`. */
+export function historyEntryKey(state: unknown): string {
+  const key = typeof state === "object" && state !== null ? (state as { key?: unknown }).key : undefined;
+  return typeof key === "string" ? key : "default";
+}

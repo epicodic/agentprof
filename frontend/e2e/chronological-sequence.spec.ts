@@ -480,6 +480,8 @@ test("tool requester and result user links reveal and mark calls without expandi
     const callUrl = new URL(page.url());
     expect(callUrl.searchParams.get("call")).toBe("id:jump-call-39");
     await page.getByRole("button", { name: "Close details" }).click();
+    // The closing drawer still renders its own track-u1 timeline until it is gone.
+    await expect(page.getByRole("dialog")).toHaveCount(0);
     await assertNoSelectionActionControls(page);
     await focusTurnSubtree(page);
     await expect.poll(() => new URL(page.url()).searchParams.get("scope")).toBe("u1");
