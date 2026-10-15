@@ -351,13 +351,14 @@ def _usage(value: object) -> UsageRecord | None:
 
 
 class _Parser:
-    def __init__(self, source_stream_id: str) -> None:
+    def __init__(self, source_stream_id: str, *, retain_native: bool = True) -> None:
         self.rollout = Rollout()
         self.rollout.source_stream_id = source_stream_id
         self._turns: dict[str, Turn] = {}
         self._tools: dict[str, ToolCall] = {}
         self._active_turn: Turn | None = None
         self._source_order = 0
+        self._retain_native_records = retain_native
 
     def feed(self, entry: dict[str, Any], physical_position: int) -> None:
         native_ordinal = entry.get("ordinal")
@@ -384,7 +385,8 @@ class _Parser:
                 or (payload.get("type") == "message" and payload.get("role") in ("user", "assistant"))
             ):
                 self.rollout.last_message_ms = max(self.rollout.last_message_ms or timestamp_ms, timestamp_ms)
-            self._retain_response_item(payload, timestamp_ms, source_order, native_ordinal, physical_position)
+            if self._retain_native_records:
+                self._retain_response_item(payload, timestamp_ms, source_order, native_ordinal, physical_position)
             self._response_item(payload, timestamp_ms, source_order)
         elif entry_type == "token_usage_record":
             self._token_usage(payload, _timestamp(entry.get("timestamp")), source_order)
@@ -421,7 +423,12 @@ class _Parser:
     ) -> None:
         event_type = payload.get("type")
         turn_id = _text(payload.get("turn_id"))
-        if event_type in {"user_message", "agent_message", "agent_reasoning", "reasoning"}:
+        if self._retain_native_records and event_type in {
+            "user_message",
+            "agent_message",
+            "agent_reasoning",
+            "reasoning",
+        }:
             content_key = next((key for key in ("content", "message", "text") if key in payload), None)
             if content_key is not None:
                 kind = (
@@ -622,9 +629,12 @@ def _source_stream_id(path: Path, source_root: Path | None = None) -> str:
     return "codex-source:" + "/".join(relative)
 
 
-def load_rollout(path: Path, source_root: Path | None = None) -> Rollout:
-    """Load one rollout JSONL file, skipping and counting malformed lines."""
-    parser = _Parser(_source_stream_id(path, source_root))
+def load_rollout(path: Path, source_root: Path | None = None, *, retain_native: bool = True) -> Rollout:
+    """Load one rollout JSONL file, skipping and counting malformed lines.
+
+    `retain_native=False` skips `native_records`, the transcript entries only `analyze` needs.
+    """
+    parser = _Parser(_source_stream_id(path, source_root), retain_native=retain_native)
     try:
         lines = path.open("rb")
     except OSError:

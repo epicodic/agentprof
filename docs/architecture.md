@@ -33,6 +33,7 @@ src/agentprof/
     agent_summary.py      # one row per logical agent for `/summary` and `SessionOut.agents`
     activity.py           # running/waiting state per node
     finding_order.py      # findings order and `Finding.rank`
+    session_index.py      # node, parent and entry lookups and a memo per analysed session
     transcripts.py        # transcript scoping, ordering, paging and search
   server/
     app.py                # FastAPI app, SSE broadcaster, static file serving
@@ -136,7 +137,7 @@ An adapter implements the `AgentAdapter` protocol in `adapters/base.py`:
 |---|---|---|
 | `discover()` | cheap | list `SessionRef`s (id, path, newest mtime of all the session's files) |
 | `open_path(path)` | cheap | recognise a file given on the command line, else `None` |
-| `summarize(ref)` | full parse | `SessionSummary` for the list row (title, workspace, times, total cost) |
+| `summarize(ref)` | parse without transcript bodies | `SessionSummary` for the list row (title, workspace, times, total cost) |
 | `analyze(ref)` | full | complete `Session` tree with raw metrics |
 
 Rules for all adapters:
@@ -146,6 +147,7 @@ Rules for all adapters:
 - Adapters set only what they know; the roll-up derives the rest.
 - Missing or ambiguous source data stays `n/a` or unresolved, never a guessed zero.
 - Parse problems go into `Session.diagnostics` instead of raising, unless the session is unreadable.
+- `summarize` skips transcript retention (`retain_native=False` in the Claude Code and Codex parsers); only `analyze` builds transcript entries.
 - `summarize` and `analyze` must report the same total cost; `tests/test_adapter_contract.py` checks this.
 
 Agent specifics:
@@ -192,7 +194,9 @@ Findings:
 - A row's state (`pending`, `summarized`, `error`) is relative to the session's current mtime, so a changed file makes it stale.
 - A daemon thread re-runs `discover` every 3 s and summarises one pending row per `step()`, newest first.
 - The worker never analyses.
-- `session(id)` analyses on demand, deduplicates concurrent requests and keeps an LRU cache of 20 sessions keyed by mtime.
+- `analysed(id)` analyses on demand, deduplicates concurrent requests and caches `AnalysedSession`s (session, mtime, `SessionIndex`) keyed by mtime; `session(id)` returns the session and mtime only.
+- The cache keeps at most 20 analyses and, beyond the most recent one, at most 256 MiB of their source files.
+- With `reanalysis_interval_s` (10 s in the app, 0 by default), a session that changed within that interval of its last analysis gets the previous analysis; `release_held()`, called by the worker, announces it again once it may be re-analysed.
 - A failed analysis is remembered for the file version it failed on.
 - Every row change emits a `RegistryEvent` (`updated` or `removed`).
 - All public methods are thread-safe behind one `RLock`.
@@ -224,6 +228,7 @@ Behaviour:
 - Transcript bodies appear only in the entry endpoint, never in tree, list or SSE responses.
 - Transcript cursors are bound to session, scope, query and filter; a vanished cursor entry returns 409.
 - Without `node_id`, transcript listing and search cover the whole session; with it, the node's ownership scope.
+- Routes look up nodes and transcript entries through the cached `SessionIndex`; `scope_entries` memoises each scope's ordered entries on it.
 - The `Broadcaster` moves registry events from the worker thread onto the asyncio loop, one queue per SSE client.
 - `schemas.py` builds the `depth`/`fields` projection; `app.py` maps its `ValueError` to 422.
 - `SessionOut.agents` embeds the same rows as `/summary`.
@@ -358,9 +363,9 @@ registry event -> Broadcaster -> SSE "updated"/"removed" -> api/events.ts -> que
 
 ```
 browser GET /api/sessions/{id}
-  -> registry.session(id)                     cache hit by mtime, or:
+  -> registry.analysed(id)                    cache hit by mtime, or:
        pipeline.analyze(adapter, ref)         adapter.analyze -> call keys -> resolve links -> roll_up -> call context -> findings
-       cache (LRU 20)
+       cache (LRU, 20 sessions / 256 MiB source)
   -> session_out(session, mtime) -> SessionOut
 node selected -> GET .../nodes/{node_id} -> prompt, result, arguments
 Content tab -> GET .../transcript, .../transcript/search, .../transcript/entries/{entry_id}

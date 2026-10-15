@@ -24,9 +24,8 @@ from agentprof.analysis.transcripts import (
     scope_entries,
     search_entries,
 )
-from agentprof.model import Session, iter_nodes
 from agentprof.pricing import PriceTable
-from agentprof.registry import EventKind, Registry, RegistryEvent, SessionUnavailable
+from agentprof.registry import AnalysedSession, EventKind, Registry, RegistryEvent, SessionUnavailable
 from agentprof.server.pricing_schema import PricingOut, pricing_out
 from agentprof.server.schemas import (
     AgentSummaryOut,
@@ -213,14 +212,14 @@ class _HostCheck:
         await self._app(scope, receive, send)
 
 
-def analysed_session(registry: Registry, session_id: str) -> tuple[Session, float]:
-    """The analysed session and its file version, or the API's 404 or 422 error.
+def analysed_session(registry: Registry, session_id: str) -> AnalysedSession:
+    """The analysed session, its file version and index, or the API's 404 or 422 error.
 
     Raises:
         HTTPException: 404 for an unknown session, 422 for one that cannot be analysed.
     """
     try:
-        return registry.session(session_id)
+        return registry.analysed(session_id)
     except KeyError as error:
         raise HTTPException(status_code=404, detail=f"unknown session {session_id!r}") from error
     except SessionUnavailable as error:
@@ -299,18 +298,18 @@ def create_app(
 
     @app.get("/api/sessions/{session_id}/summary", summary="Summarize a session by agent")
     def get_agent_summary(session_id: str) -> AgentSummaryOut:
-        session, mtime = analysed_session(registry, session_id)
-        return agent_summary_out(session, mtime)
+        analysed = analysed_session(registry, session_id)
+        return agent_summary_out(analysed.session, analysed.mtime)
 
     @app.get("/api/sessions/{session_id}/diagnostics", summary="Inspect session parse diagnostics")
     def get_diagnostics(session_id: str) -> DiagnosticsDetailOut:
-        session, _ = analysed_session(registry, session_id)
-        return diagnostics_detail_out(session.diagnostics)
+        analysed = analysed_session(registry, session_id)
+        return diagnostics_detail_out(analysed.session.diagnostics)
 
     @app.get("/api/sessions/{session_id}/findings", summary="List a session's findings by estimated cost and severity")
     def get_findings(session_id: str) -> list[FindingOut]:
-        session, _ = analysed_session(registry, session_id)
-        return [finding_out(finding) for finding in ordered_findings(session.root)]
+        analysed = analysed_session(registry, session_id)
+        return [finding_out(finding) for finding in ordered_findings(analysed.session.root)]
 
     @app.get("/api/sessions/{session_id}", response_model=SessionOut | ProjectedSessionOut)
     def get_session(
@@ -327,18 +326,17 @@ def create_app(
             Query(description="Groups: session (identity and sources), diagnostics, tree (root); comma-separated."),
         ] = None,
     ) -> SessionOut | JSONResponse:
-        session, mtime = analysed_session(registry, session_id)
+        analysed = analysed_session(registry, session_id)
         if depth is None and fields is None:
-            return session_out(session, mtime)
+            return session_out(analysed.session, analysed.mtime)
         try:
-            return JSONResponse(projected_session_out(session, mtime, depth, fields))
+            return JSONResponse(projected_session_out(analysed.session, analysed.mtime, depth, fields))
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
 
     @app.get("/api/sessions/{session_id}/nodes/{node_id}")
     def get_node(session_id: str, node_id: str) -> NodeDetailOut:
-        session, _ = analysed_session(registry, session_id)
-        node = next((node for node in iter_nodes(session.root) if node.node_id == node_id), None)
+        node = analysed_session(registry, session_id).index.node(node_id)
         if node is None:
             raise HTTPException(status_code=404, detail=f"unknown node {node_id!r}")
         return node_detail_out(node)
@@ -359,9 +357,9 @@ def create_app(
             raise HTTPException(status_code=422, detail="call_key and event_id are mutually exclusive")
         if (call_key is not None or event_id is not None) and node_id is None:
             raise HTTPException(status_code=422, detail="call_key and event_id require node_id")
-        session, mtime = analysed_session(registry, session_id)
+        analysed = analysed_session(registry, session_id)
         try:
-            entries = scope_entries(session.root, node_id, call_key=call_key, event_id=event_id)
+            entries = scope_entries(analysed.index, node_id, call_key=call_key, event_id=event_id)
             page = page_entries(
                 entries,
                 limit=limit,
@@ -372,7 +370,7 @@ def create_app(
                 after=after,
                 anchor=anchor,
             )
-            coverage = scope_coverage(session.root, node_id)
+            coverage = scope_coverage(analysed.index, node_id)
         except KeyError as error:
             raise HTTPException(status_code=404, detail=f"unknown transcript anchor or owner {str(error)!r}") from error
         except TranscriptCursorConflict as error:
@@ -382,8 +380,8 @@ def create_app(
         return TranscriptPageOut(
             session_id=session_id,
             scope_id=node_id,
-            mtime=mtime,
-            revision=f"{mtime:.6f}",
+            mtime=analysed.mtime,
+            revision=f"{analysed.mtime:.6f}",
             coverage=coverage_out(coverage),
             entries=[transcript_entry_out(entry) for entry in page.entries],
             next_cursor=page.next_cursor,
@@ -393,19 +391,11 @@ def create_app(
 
     @app.get("/api/sessions/{session_id}/transcript/entries/{entry_id}", summary="Read one transcript entry")
     def get_transcript_entry(session_id: str, entry_id: str) -> TranscriptEntryDetailOut:
-        session, _ = analysed_session(registry, session_id)
-        entry = next(
-            (
-                entry
-                for node in iter_nodes(session.root)
-                for entry in node.transcript_entries
-                if entry.entry_id == entry_id
-            ),
-            None,
-        )
+        index = analysed_session(registry, session_id).index
+        entry = index.entry(entry_id)
         if entry is None:
             raise HTTPException(status_code=404, detail=f"unknown transcript entry {entry_id!r}")
-        return transcript_detail_out(session.root, entry)
+        return transcript_detail_out(index, entry)
 
     @app.get("/api/sessions/{session_id}/transcript/search", summary="Search recorded transcript content")
     def search_transcript(
@@ -417,9 +407,9 @@ def create_app(
     ) -> TranscriptSearchOut:
         if not q.strip():
             raise HTTPException(status_code=422, detail="q must not be blank")
-        session, mtime = analysed_session(registry, session_id)
+        analysed = analysed_session(registry, session_id)
         try:
-            entries = scope_entries(session.root, node_id)
+            entries = scope_entries(analysed.index, node_id)
             hits = search_entries(entries, q)
             page = page_entries(
                 [hit.entry for hit in hits],
@@ -430,7 +420,7 @@ def create_app(
                 after=after,
             )
             hit_by_id = {hit.entry.entry_id: hit for hit in hits}
-            coverage = scope_coverage(session.root, node_id)
+            coverage = scope_coverage(analysed.index, node_id)
         except KeyError as error:
             raise HTTPException(status_code=404, detail=f"unknown transcript owner {str(error)!r}") from error
         except TranscriptCursorConflict as error:
@@ -440,8 +430,8 @@ def create_app(
         return TranscriptSearchOut(
             session_id=session_id,
             scope_id=node_id,
-            mtime=mtime,
-            revision=f"{mtime:.6f}",
+            mtime=analysed.mtime,
+            revision=f"{analysed.mtime:.6f}",
             coverage=coverage_out(coverage),
             hits=[transcript_hit_out(hit_by_id[entry.entry_id]) for entry in page.entries],
             next_cursor=page.next_cursor,
