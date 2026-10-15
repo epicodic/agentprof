@@ -10,7 +10,7 @@ import math
 from dataclasses import dataclass
 from typing import Literal
 
-from agentprof.analysis.finding_references import node_reference
+from agentprof.analysis.finding_references import call_references, node_reference
 from agentprof.model import (
     ExecutionEvent,
     FindingReference,
@@ -325,10 +325,6 @@ def _owner_reference_lookup(owner: Node) -> _OwnerReferenceLookup:
     for call in owner.llm_calls:
         if call.source_request_id is not None:
             calls_by_request.setdefault((call.source_stream_id, call.source_request_id), []).append(call)
-    call_references: dict[int, FindingReference] = {}
-    for index, call in enumerate(owner.llm_calls, start=1):
-        if call.call_key is not None:
-            call_references[id(call)] = FindingReference("call", owner.node_id, call.call_key, f"LLM call {index}")
     events_by_id: dict[str, list[ExecutionEvent]] = {}
     for event in owner.execution_events:
         if event.event_id:
@@ -337,7 +333,7 @@ def _owner_reference_lookup(owner: Node) -> _OwnerReferenceLookup:
     for child in owner.children:
         if child.kind is NodeKind.TOOL:
             tools_by_id.setdefault(child.node_id, []).append(child)
-    return _OwnerReferenceLookup(calls_by_request, call_references, events_by_id, tools_by_id)
+    return _OwnerReferenceLookup(calls_by_request, call_references(owner), events_by_id, tools_by_id)
 
 
 def encode_cursor(

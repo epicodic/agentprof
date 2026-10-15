@@ -2,7 +2,7 @@
 # Copyright (c) 2026 epicodic
 """Build stable, unambiguous references for evidence-backed findings."""
 
-from agentprof.model import ExecutionEvent, FindingReference, LlmCall, Node
+from agentprof.model import ExecutionEvent, FindingReference, Node
 
 
 def node_reference(node: Node) -> FindingReference:
@@ -11,15 +11,16 @@ def node_reference(node: Node) -> FindingReference:
     return FindingReference(kind="node", owner_id=node.node_id, key=node.node_id, label=label)
 
 
-def call_reference(owner: Node, call: LlmCall) -> FindingReference | None:
-    """Reference one of `owner`'s calls by its `LlmCall.call_key` (set by `identity.assign_call_keys`).
+def call_references(owner: Node) -> dict[int, FindingReference]:
+    """References to `owner`'s calls, keyed by `id(call)` and labelled by position ("LLM call 3").
 
-    `None` when the call is not one of `owner`'s or has no key.
+    A call without a `LlmCall.call_key` (set by `identity.assign_call_keys`) has no reference.
     """
-    index = next((index for index, other in enumerate(owner.llm_calls) if other is call), None)
-    if index is None or call.call_key is None:
-        return None
-    return FindingReference(kind="call", owner_id=owner.node_id, key=call.call_key, label=f"LLM call {index + 1}")
+    return {
+        id(call): FindingReference(kind="call", owner_id=owner.node_id, key=call.call_key, label=f"LLM call {index}")
+        for index, call in enumerate(owner.llm_calls, start=1)
+        if call.call_key is not None
+    }
 
 
 def event_reference(owner: Node, event: ExecutionEvent) -> FindingReference | None:

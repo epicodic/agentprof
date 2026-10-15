@@ -178,7 +178,7 @@ Findings:
 
 - **Waste heuristics** (`W1`–`W5`, `W7`, `W8`) are small per-node checks in `heuristics._CHECKS`, run on every turn and agent.
 - **Evidence findings** (`E1`–`E7`) work per logical agent: cache rewrites, waits, context growth, idle parents, resumes, long gaps, compactions.
-- Findings cite nodes, calls and events through `finding_references`.
+- Findings cite nodes, calls and events through `finding_references`; `call_references(owner)` builds all of an owner's call references in one pass, matched by call identity.
 - `identity.call_keys` is the only definition of a call's key: a unique native id, else a unique exact timestamp, else none.
 - `identity.owned_nodes` is the only definition of a node's logical agent owner.
 - `finding_order.ordered_findings` is the only definition of the findings order: known avoidable USD, severity, then event time.
@@ -387,10 +387,11 @@ file changes -> worker emits "updated" with newer mtime -> frontend refetches th
 
 ### Add an evidence finding
 
-1. Add it to `analysis/evidence_findings.py` when it needs a logical agent's calls in order or the `call_context` annotations.
-2. Use the next free `E` id and cite calls and events with `finding_references`.
-3. Keep observed and avoidable costs separate.
-4. Add tests in `tests/analysis/test_evidence_findings.py`.
+1. Add a `_check_*` function to `analysis/evidence_findings.py` when the finding needs a logical agent's calls in order or the `call_context` annotations, and register it in `_CHECKS`.
+2. Read what the shared `_Context` holds (each logical agent's timed calls, compactions and the node index), and read `gap`, `gap_basis`, `preceding_events` and `cold_rewrite` from the calls instead of recomputing them.
+3. Use the next free `E` id and cite calls with `_Context.call_ref` and nodes and events with `finding_references`.
+4. Keep observed and avoidable costs separate.
+5. Add tests in `tests/analysis/test_evidence_findings.py`; a test that relies on the annotations runs `annotate_call_context` first or sets them on the calls.
 
 ### Change the API
 
