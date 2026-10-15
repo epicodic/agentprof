@@ -5,6 +5,7 @@ import { expect, type Locator, test } from "@playwright/test";
 import type { SessionOut } from "../src/api/types";
 import { cost, makeCall, makeExecutionEvent, makeNode, metric } from "../src/test/factories";
 import { served } from "../src/test/served";
+import { saveScreenshot } from "./helpers/screenshots";
 import { assertNoSelectionActionControls } from "./helpers/workflowFixture";
 
 const SESSION = "claude-code:11111111-1111-4111-8111-111111111111";
@@ -210,9 +211,7 @@ test("Calls sorting is controlled by the visible column headers", async ({ page 
   await expect(calls.getByLabel("Sequence order")).toHaveCount(0);
 });
 
-test("Calls summaries stay on one line and expose readable tool details before source evidence", async ({
-  page,
-}, testInfo) => {
+test("Calls summaries stay on one line and expose readable tool details before source evidence", async ({ page }) => {
   await page.route(`**/api/sessions/${encodeURIComponent(SESSION)}`, async (route) => {
     const response = await route.fetch();
     const session = (await response.json()) as SessionOut;
@@ -292,7 +291,7 @@ test("Calls summaries stay on one line and expose readable tool details before s
       });
     }
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(viewport.width);
-    await page.screenshot({ path: testInfo.outputPath(`compact-calls-${viewport.width}.png`) });
+    await saveScreenshot(page, `compact-calls-${viewport.width}.png`);
     await tool.click();
     await expect(tool).toHaveAttribute("data-selection", "exact");
     await expect(tool.getByRole("button", { name: "Expand Read" })).toHaveAttribute("aria-expanded", "false");
@@ -319,7 +318,7 @@ test("Calls summaries stay on one line and expose readable tool details before s
     await expect(streams).toHaveCount(0);
     for (const stream of await streams.all()) await expect(stream).not.toBeVisible();
     await details.scrollIntoViewIfNeeded();
-    await page.screenshot({ path: testInfo.outputPath(`expanded-tool-${viewport.width}.png`) });
+    await saveScreenshot(page, `expanded-tool-${viewport.width}.png`);
     await expect(details.getByText("Source evidence", { exact: true })).toHaveCount(0);
     await expect(details.getByText("Requester", { exact: true })).toBeVisible();
     await expect(details.getByText("Result user", { exact: true })).toBeVisible();

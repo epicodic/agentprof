@@ -5,6 +5,7 @@ import { expect, type Locator, test } from "@playwright/test";
 import type { NodeOut, SessionOut } from "../src/api/types";
 import { cost, makeCall, makeNode, makeSession, makeTool, metric, tokens } from "../src/test/factories";
 import { served } from "../src/test/served";
+import { saveScreenshot } from "./helpers/screenshots";
 
 const SESSION = "synthetic:large-public-workflow";
 const BASE_TIME = Date.UTC(2026, 9, 5, 9, 0, 0);
@@ -195,7 +196,7 @@ async function expectNoPageOverflow(page: import("@playwright/test").Page): Prom
   expect(widths.document, "page-wide horizontal overflow").toBeLessThanOrEqual(widths.viewport);
 }
 
-test("large public synthetic workflow stays inspectable on phone and desktop", async ({ page }, testInfo) => {
+test("large public synthetic workflow stays inspectable on phone and desktop", async ({ page }) => {
   const session = makeLargeWorkflow();
   const turns = session.root.children;
   const allCalls = turns.reduce((sum, turn) => sum + turn.llm_calls.length, 0) + 3;
@@ -224,7 +225,7 @@ test("large public synthetic workflow stays inspectable on phone and desktop", a
   expect(treeRowBox.height).toBeLessThanOrEqual(30);
   if ((await triangle.getAttribute("aria-expanded")) === "false") await triangle.click();
   await expect(page.getByTestId("tree-row-agent-nested-review")).toBeVisible();
-  await page.screenshot({ path: testInfo.outputPath("large-desktop-workflow-tree.png"), fullPage: false });
+  await saveScreenshot(page, "large-desktop-workflow-tree.png");
   await expectNoPageOverflow(page);
 
   await page
@@ -237,7 +238,7 @@ test("large public synthetic workflow stays inspectable on phone and desktop", a
   const calls = dialog.getByRole("tabpanel");
   const callRows = calls.locator('tr[data-testid^="call-cost-turn-large-1-"]');
   await expect(callRows).toHaveCount(32);
-  await page.screenshot({ path: testInfo.outputPath("large-desktop-calls-overview.png"), fullPage: false });
+  await saveScreenshot(page, "large-desktop-calls-overview.png");
   while (await calls.getByRole("button", { name: /^Expand \d+ tools$/ }).count()) {
     await calls
       .getByRole("button", { name: /^Expand \d+ tools$/ })
@@ -278,7 +279,7 @@ test("large public synthetic workflow stays inspectable on phone and desktop", a
   await expect(calls.locator('tr[data-testid^="call-cost-"] button[aria-label^="Show details:"]')).toHaveCount(0);
   await expect(calls.getByTestId("call-cost-turn-large-1-0").locator('td[data-label="Item"]')).toHaveText("LLM call 1");
   await failedInvocation.scrollIntoViewIfNeeded();
-  await page.screenshot({ path: testInfo.outputPath("large-desktop-calls.png"), fullPage: false });
+  await saveScreenshot(page, "large-desktop-calls.png");
 
   await firstInvocation.click({ button: "right" });
   await expect(menu).toBeVisible();
@@ -313,14 +314,14 @@ test("large public synthetic workflow stays inspectable on phone and desktop", a
   expect(phoneTurnDetailsBox.x).toBeGreaterThanOrEqual(0);
   expect(phoneTurnDetailsBox.x + phoneTurnDetailsBox.width).toBeLessThanOrEqual(390);
   await expect(page.getByTestId("tree-row-agent-nested-review")).toBeVisible();
-  await page.screenshot({ path: testInfo.outputPath("large-phone-workflow-tree.png"), fullPage: false });
+  await saveScreenshot(page, "large-phone-workflow-tree.png");
   await phoneTurnDetails.click();
   const phoneDialog = page.getByRole("dialog");
   await phoneDialog.getByRole("tab", { name: "Workflow", exact: true }).click();
   await openDisclosure(phoneDialog.getByTestId("workflow-calls"));
   const phoneCalls = phoneDialog.getByRole("tabpanel");
   await expect(phoneCalls.locator('tr[data-testid^="call-cost-turn-large-1-"]')).toHaveCount(32);
-  await page.screenshot({ path: testInfo.outputPath("large-phone-calls-overview.png"), fullPage: false });
+  await saveScreenshot(page, "large-phone-calls-overview.png");
   while (await phoneCalls.getByRole("button", { name: /^Expand \d+ tools$/ }).count()) {
     await phoneCalls
       .getByRole("button", { name: /^Expand \d+ tools$/ })
@@ -376,6 +377,6 @@ test("large public synthetic workflow stays inspectable on phone and desktop", a
   expect(phoneMenuBox.y + phoneMenuBox.height).toBeLessThanOrEqual(844);
   await phoneTool.dispatchEvent("pointerup", { pointerType: "touch", clientX: menuX, clientY: menuY });
   await page.keyboard.press("Escape");
-  await page.screenshot({ path: testInfo.outputPath("large-phone-calls.png"), fullPage: false });
+  await saveScreenshot(page, "large-phone-calls.png");
   await expectNoPageOverflow(page);
 });
