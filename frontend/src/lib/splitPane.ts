@@ -21,3 +21,10 @@ export function splitPercentAfterDrag(pointerY: number, containerHeight: number)
   if (containerHeight <= 0) return DEFAULT_SPLIT_PERCENT;
   return clampPercent((pointerY / containerHeight) * 100);
 }
+
+/** The split after an arrow key on the splitter, or `null` for any other key. */
+export function stepSplitPercent(value: number, key: string): number | null {
+  if (key === "ArrowUp") return clampPercent(value - 1);
+  if (key === "ArrowDown") return clampPercent(value + 1);
+  return null;
+}
