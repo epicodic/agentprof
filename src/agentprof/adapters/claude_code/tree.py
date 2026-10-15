@@ -480,60 +480,100 @@ def _attach_native_transcripts(
             for block_position, block in indexed_blocks:
                 retained_block = block or TranscriptBlock(kind="message")
                 entry = _native_entry(record, retained_block, block_position, owner, transcript)
-                logical = transcript.source_stream_id
-                if entry.invocation_id is not None and logical is not None:
-                    event_kind = "tool-result" if entry.kind == "tool_result" else "tool-start"
-                    matches = all_events.get((logical, f"{event_kind}:{entry.invocation_id}"), [])
-                    exact = [event for event in matches if event.source_order == record.source_order]
-                    if len(exact) == 1:
-                        entry.event_id = exact[0].event_id
-                        entry.subject_node_id = exact[0].subject_node_id
-                elif entry.kind == "user_message" and logical is not None and record.native_id is not None:
-                    matches = all_events.get((logical, f"user-input:{record.native_id}"), [])
-                    exact = [
-                        event
-                        for event in matches
-                        if event.kind == "user_input" and event.source_order == record.source_order
-                    ]
-                    if len(exact) == 1:
-                        entry.event_id = exact[0].event_id
-                        entry.subject_node_id = exact[0].subject_node_id
+                _link_execution_event(entry, record, transcript.source_stream_id, all_events)
                 owner.transcript_entries.append(entry)
                 entries_by_owner.setdefault(id(owner), []).append(entry)
-                if retained_block.availability == "encrypted":
-                    owner_reasons.add("encrypted_content")
-                elif retained_block.availability == "unsupported":
-                    owner_reasons.add("unsupported_content")
-                elif retained_block.availability == "unavailable":
-                    owner_reasons.add("unavailable_content")
+                reason = _content_reason(retained_block)
+                if reason is not None:
+                    owner_reasons.add(reason)
             if record.timestamp_ms is None:
                 owner_reasons.add("missing_timestamps")
-        if transcript.malformed_lines:
-            reasons_by_owner.setdefault(id(source_owner), set()).add("malformed_lines_skipped")
-            for _, owner in records:
-                reasons_by_owner.setdefault(id(owner), set()).add("malformed_lines_skipped")
-        owners = {id(owner): owner for _, owner in records}
-        owners.setdefault(id(source_owner), source_owner)
-        for owner_id, owner in owners.items():
-            owner.transcript_coverage = TranscriptCoverage(
-                source_present=True,
-                categories=sorted({entry.kind for entry in entries_by_owner.get(owner_id, [])}),
-                reasons=sorted(reasons_by_owner.get(owner_id, set())),
-            )
+        _set_native_coverage(records, source_owner, transcript, entries_by_owner, reasons_by_owner)
+        _attach_terminal_results(records)
 
-        terminal_text_by_owner: dict[int, tuple[Node, str]] = {}
-        for record, owner in records:
-            if record.entry_type != "assistant" or record.stop_reason != "end_turn":
-                continue
-            terminal_blocks = [
-                block for block in record.blocks if block.native_type == "text" and block.text is not None
-            ]
-            if terminal_blocks:
-                terminal_text = "\n".join(block.text or "" for block in terminal_blocks)
-                terminal_text_by_owner[id(owner)] = (owner, terminal_text)
-        for owner, terminal_text in terminal_text_by_owner.values():
-            if owner.tool is None and not owner.result:
-                owner.result = terminal_text
+
+def _link_execution_event(
+    entry: TranscriptEntry,
+    record: NativeRecord,
+    logical: str | None,
+    all_events: dict[tuple[str | None, str], list[ExecutionEvent]],
+) -> None:
+    if entry.invocation_id is not None and logical is not None:
+        event_kind = "tool-result" if entry.kind == "tool_result" else "tool-start"
+        matches = all_events.get((logical, f"{event_kind}:{entry.invocation_id}"), [])
+        exact = [event for event in matches if event.source_order == record.source_order]
+        if len(exact) == 1:
+            entry.event_id = exact[0].event_id
+            entry.subject_node_id = exact[0].subject_node_id
+    elif entry.kind == "user_message" and logical is not None and record.native_id is not None:
+        matches = all_events.get((logical, f"user-input:{record.native_id}"), [])
+        exact = [event for event in matches if event.kind == "user_input" and event.source_order == record.source_order]
+        if len(exact) == 1:
+            entry.event_id = exact[0].event_id
+            entry.subject_node_id = exact[0].subject_node_id
+
+
+def _content_reason(block: TranscriptBlock) -> str | None:
+    if block.availability == "encrypted":
+        return "encrypted_content"
+    if block.availability == "unsupported":
+        return "unsupported_content"
+    if block.availability == "unavailable":
+        return "unavailable_content"
+    return None
+
+
+def _set_native_coverage(
+    records: list[tuple[NativeRecord, Node]],
+    source_owner: Node,
+    transcript: Transcript,
+    entries_by_owner: dict[int, list[TranscriptEntry]],
+    reasons_by_owner: dict[int, set[str]],
+) -> None:
+    if transcript.malformed_lines:
+        reasons_by_owner.setdefault(id(source_owner), set()).add("malformed_lines_skipped")
+        for _, owner in records:
+            reasons_by_owner.setdefault(id(owner), set()).add("malformed_lines_skipped")
+    owners = {id(owner): owner for _, owner in records}
+    owners.setdefault(id(source_owner), source_owner)
+    for owner_id, owner in owners.items():
+        owner.transcript_coverage = TranscriptCoverage(
+            source_present=True,
+            categories=sorted({entry.kind for entry in entries_by_owner.get(owner_id, [])}),
+            reasons=sorted(reasons_by_owner.get(owner_id, set())),
+        )
+
+
+def _attach_terminal_results(records: list[tuple[NativeRecord, Node]]) -> None:
+    terminal_text_by_owner: dict[int, tuple[Node, str]] = {}
+    for record, owner in records:
+        if record.entry_type != "assistant" or record.stop_reason != "end_turn":
+            continue
+        terminal_blocks = [block for block in record.blocks if block.native_type == "text" and block.text is not None]
+        if terminal_blocks:
+            terminal_text = "\n".join(block.text or "" for block in terminal_blocks)
+            terminal_text_by_owner[id(owner)] = (owner, terminal_text)
+    for owner, terminal_text in terminal_text_by_owner.values():
+        if owner.tool is None and not owner.result:
+            owner.result = terminal_text
+
+
+def _tool_event_owner(
+    transcript: Transcript,
+    timestamp_ms: int,
+    node: Node | None,
+    parents: dict[int, Node],
+    subagent_transcripts: list[Transcript],
+    transcript_owners: dict[int, Node],
+    turns: list[Node],
+    root: Node,
+) -> Node | None:
+    """The node that owns a tool event: the tool node's parent, the subagent's node, or the turn at that time."""
+    if node is not None and id(node) in parents:
+        return parents[id(node)]
+    if any(transcript is candidate for candidate in subagent_transcripts):
+        return transcript_owners.get(id(transcript))
+    return _turn_at(turns, timestamp_ms) or root
 
 
 def _emit_tool_events(
@@ -546,11 +586,9 @@ def _emit_tool_events(
     turns = [node for node in root.children if node.kind is NodeKind.TURN]
 
     def owner_for(transcript: Transcript, timestamp_ms: int, node: Node | None) -> Node | None:
-        if node is not None and id(node) in parents:
-            return parents[id(node)]
-        if any(transcript is candidate for candidate in transcripts[1:]):
-            return builder._transcript_owners.get(id(transcript))
-        return _turn_at(turns, timestamp_ms) or root
+        return _tool_event_owner(
+            transcript, timestamp_ms, node, parents, transcripts[1:], builder._transcript_owners, turns, root
+        )
 
     for transcript in transcripts:
         record_list = transcript.tool_result_records or list(transcript.tool_results.items())

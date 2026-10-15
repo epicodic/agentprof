@@ -4,6 +4,8 @@
 
 import re
 
+from agentprof.adapters.common import first_line
+
 NO_PROMPT = "(no prompt)"
 _TOPIC_LENGTH = 200
 _BLOCK_TAGS = ("ide_opened_file", "ide_selection", "system-reminder", "local-command-caveat")
@@ -12,11 +14,6 @@ _COMMAND_RE = re.compile(r"<command-name>(.*?)</command-name>(?:<command-args>(.
 _LOCAL_COMMAND_STDOUT_RE = re.compile(r"<local-command-stdout>.*?</local-command-stdout>", re.DOTALL)
 _TASK_NOTIFICATION_RE = re.compile(r"<task-notification>(.*?)</task-notification>", re.DOTALL)
 _SUMMARY_RE = re.compile(r"<summary>(.*?)</summary>", re.DOTALL)
-
-
-def first_line(text: str, limit: int) -> str:
-    """The first non-blank line of `text`, stripped and cut to `limit` characters."""
-    return next((line.strip()[:limit] for line in text.splitlines() if line.strip()), "")
 
 
 def prompt_topic(text: str) -> str:

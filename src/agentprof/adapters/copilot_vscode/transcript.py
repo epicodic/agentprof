@@ -2,13 +2,14 @@
 # Copyright (c) 2026 epicodic
 """Parse Copilot transcript records, timings, and legacy LLM call attribution."""
 
-import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from agentprof.adapters.common import MalformedLines, iter_jsonl
 from agentprof.adapters.copilot_vscode.tools import is_subagent_tool_id
 from agentprof.adapters.timestamps import parse_iso_ms
+from agentprof.model import MalformedLineDetail
 
 
 @dataclass
@@ -73,6 +74,7 @@ class Transcript:
     session_id: str | None = None
     source_filename: str | None = None
     malformed_lines: int = 0
+    malformed_line_details: list[MalformedLineDetail] = field(default_factory=list)
 
 
 def _apply_event(transcript: Transcript, stack: list[str | None], event: dict[str, Any], source_order: int) -> None:
@@ -177,30 +179,29 @@ def load_transcript(path: Path) -> Transcript:
     # The stack tracks which agent tool call's bracket is currently open; `None` is the main agent.
     stack: list[str | None] = [None]
 
-    for source_order, line in enumerate(path.read_text().splitlines()):
-        if not line.strip():
-            continue
+    malformed = MalformedLines()
+    for line in iter_jsonl(path, malformed):
+        event = line.value
+        source_order = line.number - 1
         try:
-            event = json.loads(line)
-            if isinstance(event, dict):
-                transcript.native_records.append(
-                    NativeTranscriptRecord(
-                        event=event,
-                        source_position=source_order,
-                        native_ordinal=len(transcript.native_records),
-                    )
+            transcript.native_records.append(
+                NativeTranscriptRecord(
+                    event=event,
+                    source_position=source_order,
+                    native_ordinal=len(transcript.native_records),
                 )
-                if event.get("type") == "session.start":
-                    data = event.get("data")
-                    session_id = data.get("sessionId") if isinstance(data, dict) else None
-                    if isinstance(session_id, str):
-                        transcript.session_id = session_id
-                elif transcript.session_id is None and isinstance(event.get("sessionId"), str):
-                    transcript.session_id = event["sessionId"]
-                _apply_event(transcript, stack, event, source_order)
-            else:
-                transcript.malformed_lines += 1
-        except (json.JSONDecodeError, KeyError, TypeError, ValueError):
-            transcript.malformed_lines += 1
+            )
+            if event.get("type") == "session.start":
+                data = event.get("data")
+                session_id = data.get("sessionId") if isinstance(data, dict) else None
+                if isinstance(session_id, str):
+                    transcript.session_id = session_id
+            elif transcript.session_id is None and isinstance(event.get("sessionId"), str):
+                transcript.session_id = event["sessionId"]
+            _apply_event(transcript, stack, event, source_order)
+        except (KeyError, TypeError, ValueError) as error:
+            malformed.add(path, line.number, line.text, error)
+    transcript.malformed_lines = malformed.count
+    transcript.malformed_line_details = malformed.details
 
     return transcript

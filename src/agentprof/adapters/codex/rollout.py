@@ -2,13 +2,14 @@
 # Copyright (c) 2026 epicodic
 """Parse native Codex rollout JSONL files."""
 
-import json
+from collections.abc import Container
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from agentprof.adapters.common import MalformedLines, iter_jsonl
 from agentprof.adapters.timestamps import parse_iso_ms
-from agentprof.model import TranscriptBlock, TranscriptKind
+from agentprof.model import MalformedLineDetail, TranscriptBlock, TranscriptKind
 
 
 @dataclass(frozen=True)
@@ -155,6 +156,7 @@ class Rollout:
     result: str | None = None
     turns: list[Turn] = field(default_factory=list)
     malformed_lines: int = 0
+    malformed_line_details: list[MalformedLineDetail] = field(default_factory=list)
     last_message_ms: int | None = None
     source_stream_id: str | None = None
     logical_stream_id: str | None = None
@@ -348,6 +350,20 @@ def _usage(value: object) -> UsageRecord | None:
             name for name in _USAGE_FIELDS if isinstance(value.get(name), int) and not isinstance(value.get(name), bool)
         ),
     )
+
+
+def decide_record_owner(
+    payload: dict[str, Any], turns: Container[str], active_turn_id: str | None
+) -> tuple[str | None, str]:
+    """The turn that owns a record and the evidence: its explicit `turn_id`, else the active task."""
+    explicit_turn_id = _text(payload.get("turn_id"))
+    if explicit_turn_id is not None:
+        if explicit_turn_id in turns:
+            return explicit_turn_id, f"explicit_turn:{explicit_turn_id}"
+        return None, f"unresolved_turn:{explicit_turn_id}"
+    if active_turn_id is not None:
+        return active_turn_id, f"active_task:{active_turn_id}"
+    return None, "unassigned_turn"
 
 
 class _Parser:
@@ -550,7 +566,9 @@ class _Parser:
         source_id = self.rollout.source_stream_id
         if source_id is None:
             return
-        owner_turn_id, ownership_evidence = self._record_owner(payload)
+        owner_turn_id, ownership_evidence = decide_record_owner(
+            payload, self._turns, self._active_turn.turn_id if self._active_turn is not None else None
+        )
         self.rollout.native_records.append(
             NativeRecord(
                 source_position=physical_position,
@@ -583,16 +601,6 @@ class _Parser:
                 event_id=event_id,
             )
         )
-
-    def _record_owner(self, payload: dict[str, Any]) -> tuple[str | None, str]:
-        explicit_turn_id = _text(payload.get("turn_id"))
-        if explicit_turn_id is not None:
-            if explicit_turn_id in self._turns:
-                return explicit_turn_id, f"explicit_turn:{explicit_turn_id}"
-            return None, f"unresolved_turn:{explicit_turn_id}"
-        if self._active_turn is not None:
-            return self._active_turn.turn_id, f"active_task:{self._active_turn.turn_id}"
-        return None, "unassigned_turn"
 
     def _token_usage(self, payload: dict[str, Any], timestamp_ms: int | None, source_order: int) -> None:
         usage = _usage(payload.get("usage"))
@@ -635,20 +643,17 @@ def load_rollout(path: Path, source_root: Path | None = None, *, retain_native: 
     `retain_native=False` skips `native_records`, the transcript entries only `analyze` needs.
     """
     parser = _Parser(_source_stream_id(path, source_root), retain_native=retain_native)
+    malformed = MalformedLines()
+    parser.rollout.source_present = True  # turns copy it while parsing; reset below if the file is unreadable
     try:
-        lines = path.open("rb")
-    except OSError:
-        return parser.rollout
-    with lines:
-        parser.rollout.source_present = True
-        for physical_position, raw_line in enumerate(lines):
-            if not raw_line.strip():
-                continue
+        for line in iter_jsonl(path, malformed):
             try:
-                entry = json.loads(raw_line.decode("utf-8"))
-                if not isinstance(entry, dict):
-                    raise TypeError("rollout line is not a JSON object")
-                parser.feed(entry, physical_position)
-            except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError):
-                parser.rollout.malformed_lines += 1
+                parser.feed(line.value, line.number - 1)
+            except (TypeError, ValueError) as error:
+                malformed.add(path, line.number, line.text, error)
+    except OSError:
+        parser.rollout.source_present = False
+        return parser.rollout
+    parser.rollout.malformed_lines = malformed.count
+    parser.rollout.malformed_line_details = malformed.details
     return parser.rollout

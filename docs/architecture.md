@@ -17,7 +17,8 @@ src/agentprof/
   adapters/
     base.py               # AgentAdapter protocol, SessionRef, SessionSummary, AdapterConfig
     __init__.py           # load_adapters(): instantiate entry points of group `agentprof.adapters`
-    turns.py, timestamps.py, execution.py  # helpers shared by adapters
+    common.py             # iter_jsonl and malformed-line details, first_line, title_from_prompts
+    turns.py, timestamps.py, execution.py  # more helpers shared by adapters
     claude_code/          # ~/.claude/projects/<project>/<sid>.jsonl + subagents/
     codex/                # ~/.codex/sessions: grouped rollout JSONL files + subagents
     copilot_vscode/       # VS Code workspaceStorage: session + transcript + debug log
@@ -147,6 +148,8 @@ Rules for all adapters:
 - Adapters set only what they know; the roll-up derives the rest.
 - Missing or ambiguous source data stays `n/a` or unresolved, never a guessed zero.
 - Parse problems go into `Session.diagnostics` instead of raising, unless the session is unreadable.
+- Read JSONL files with `common.iter_jsonl`; it records undecodable lines, and a parser records lines it cannot process with `MalformedLines.add`, so every adapter reports malformed-line details.
+- Keep each per-record ownership decision in a pure function with a table-driven test (`copilot_vscode/ownership.decide_owner`, `codex/rollout.decide_record_owner`, `claude_code/tree._tool_event_owner`); a new `ownership_evidence` value gets its own test row.
 - `summarize` skips transcript retention (`retain_native=False` in the Claude Code and Codex parsers); only `analyze` builds transcript entries.
 - `summarize` and `analyze` must report the same total cost; `tests/test_adapter_contract.py` checks this.
 
@@ -377,6 +380,7 @@ file changes -> worker emits "updated" with newer mtime -> frontend refetches th
 ### Add an agent adapter
 
 1. Create `adapters/<name>/` with the usual split (`discovery`, parsers, `tools`, `tree`, `adapter`).
+   Use `adapters/common.py` for JSONL reading and titles.
 2. Implement the four protocol methods; `name` becomes the id prefix `<name>:<native-id>`.
 3. Include every file the session depends on in `SessionRef.mtime` (use `latest_mtime`).
 4. Map every native tool id in `tools.py`; unknown ids map to `other` and are counted in diagnostics.

@@ -260,3 +260,13 @@ def test_load_transcript_without_native_records_keeps_everything_else() -> None:
     assert full.native_records
     assert light.native_records == []
     assert light == replace(full, native_records=[])
+
+
+def test_a_line_that_is_not_utf8_counts_as_malformed(tmp_path: Path) -> None:
+    path = tmp_path / "s.jsonl"
+    path.write_bytes(b"\xff\xfe\n")
+
+    transcript = load_transcript(path)
+
+    assert transcript.malformed_lines == 1
+    assert transcript.malformed_line_details[0].line_number == 1

@@ -3,8 +3,11 @@
 
 from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
-from agentprof.adapters.codex.rollout import UsageRecord, load_rollout
+import pytest
+
+from agentprof.adapters.codex.rollout import UsageRecord, decide_record_owner, load_rollout
 from agentprof.adapters.timestamps import parse_iso_ms
 
 _ROOT = Path(__file__).parent / "fixtures/sessions/2026/09/26/rollout-2026-09-26T10-00-00-root.jsonl"
@@ -120,6 +123,18 @@ def test_load_rollout_skips_invalid_utf8_lines_after_valid_records(tmp_path: Pat
     assert rollout.malformed_lines == 1
 
 
+def test_load_rollout_keeps_malformed_line_details(tmp_path: Path) -> None:
+    path = tmp_path / "rollout-2026-01-01T00-00-00-abc.jsonl"
+    path.write_text('{"broken\n')
+
+    rollout = load_rollout(path)
+
+    assert rollout.malformed_lines == 1
+    assert [(detail.line_number, detail.error_category) for detail in rollout.malformed_line_details] == [
+        (1, "invalid_json")
+    ]
+
+
 def test_load_rollout_without_native_records_keeps_everything_else() -> None:
     full = load_rollout(_ROOT)
     light = load_rollout(_ROOT, retain_native=False)
@@ -127,3 +142,18 @@ def test_load_rollout_without_native_records_keeps_everything_else() -> None:
     assert full.native_records
     assert light.native_records == []
     assert light == replace(full, native_records=[])
+
+
+@pytest.mark.parametrize(
+    ("payload", "turns", "active_turn_id", "expected"),
+    [
+        ({"turn_id": "t1"}, {"t1"}, None, ("t1", "explicit_turn:t1")),
+        ({"turn_id": "t9"}, {"t1"}, "t1", (None, "unresolved_turn:t9")),
+        ({}, {"t1"}, "t1", ("t1", "active_task:t1")),
+        ({}, set(), None, (None, "unassigned_turn")),
+    ],
+)
+def test_decide_record_owner(
+    payload: dict[str, Any], turns: set[str], active_turn_id: str | None, expected: tuple[str | None, str]
+) -> None:
+    assert decide_record_owner(payload, turns, active_turn_id) == expected
