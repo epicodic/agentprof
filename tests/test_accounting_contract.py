@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 epicodic
-"""Cross-adapter cache reconciliation using public synthetic source records."""
+"""Cross-adapter accounting: cache quantities, billing categories, pricing gaps and Codex evidence findings."""
 
 import json
 from pathlib import Path

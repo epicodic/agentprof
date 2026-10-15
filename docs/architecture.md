@@ -47,12 +47,12 @@ frontend/src/
   api/                    # fetch client, query hooks, SSE handling, generated schema.ts
   pages/                  # SessionListPage (/), SessionPage (/sessions/:id)
   components/             # React components; see "Frontend" below
-  hooks/                  # session-view state: split, follow latest, history, reveals, navigation, scope
+  hooks/                  # session-view state: split, follow latest, history, reveals, navigation, scope, remembered state
   lib/                    # pure logic with unit tests; see "Frontend" below
   test/                   # test data factories and workflow fixtures
 frontend/e2e/             # Playwright specs
 tests/                    # pytest, mirrors src/; adapter fixtures under tests/adapters/*/fixtures
-tools/qa/                 # dev-only package: `qa`, `build-dist`, `smoke`
+tools/qa/                 # dev-only package: `qa`, `build-dist`, `smoke`, `bench`
 docs/                     # architecture, session view, coding conventions, releasing
 ```
 
@@ -77,9 +77,13 @@ flowchart LR
 Keep these boundaries:
 
 - `model.py` depends on nothing; everything else depends on it.
-- Adapters know nothing about each other, the registry or the server.
+- `pricing.py` depends only on the model; adapters use it for cost estimates and the server for the price-table response.
+- Adapters know nothing about each other, the registry, the analysis layer or the server.
 - The analysis layer sees only the neutral model, never native tool ids or file formats.
-- The server only translates the neutral model into response schemas.
+  The one exception is `analysis/pipeline.py`, which imports the `AgentAdapter` protocol and `SessionRef` from `adapters/base.py` to call `adapter.analyze`.
+- The server never touches adapters.
+  It reads sessions from the registry, calls read-only analysis helpers (`agent_summary`, `finding_order`, `activity`, `transcripts`, `session_index`) and translates the neutral model into response schemas.
+- `cli.py` is the composition root: it wires adapters, registry, pricing and server.
 - The frontend sees only the API; its types are generated from the OpenAPI schema.
 
 ## Components
@@ -202,12 +206,13 @@ Findings:
 - The cache keeps at most 20 analyses and, beyond the most recent one, at most 256 MiB of their source files.
 - With `reanalysis_interval_s` (10 s in the app, 0 by default), a session that changed within that interval of its last analysis gets the previous analysis; `release_held()`, called by the worker, announces it again once it may be re-analysed.
 - A failed analysis is remembered for the file version it failed on.
+- A session file given on the command line outside the adapter roots becomes a pinned row; `refresh` reopens it with `open_path` while it is not discovered.
 - Every row change emits a `RegistryEvent` (`updated` or `removed`).
 - All public methods are thread-safe behind one `RLock`.
 
 ### Server (`server/`)
 
-`create_app(registry, pricing=...)` builds the FastAPI app:
+`create_app(registry, pricing=..., allowed_hosts=...)` builds the FastAPI app:
 
 | Endpoint | Returns |
 |---|---|
@@ -257,6 +262,8 @@ pages/
 components/
   session workspace
     SessionView         composes the hooks for inspection, selection, scope, follow mode, history and split-pane state
+    SessionWorkspace    resizable tree pane, splitter and collapsible agent-summary pane
+    SessionStatusMessages  polite messages above the workspace
     SessionInteraction  shared interaction context and inspection memory
     SessionHeader       title, badges, headline figures, diagnostics
     WorkflowToolbar     scope, activity filter and follow-latest controls
@@ -300,6 +307,7 @@ lib/                pure functions, no React
   executionSequence, toolExecutions, inspectionSequence, llmCallRows, eventRelations   call sequence
   timeline, drawerTimeDomain, chartScale, context, cost, cache   chart geometry and figures
   agentColor, metricColor, artifacts, transcript, localMarks, entityHitGroups
+  treeReveal, followLatest, historyRestoration, destinationSequence, transcriptPosition   session-view hook decisions
   filters, paging, splitPane, format, severity
 api/                client, query hooks, SSE, types
 ```
@@ -340,7 +348,9 @@ api/                client, query hooks, SSE, types
 
 - Usage: `agentprof [SESSION|PATH] [--host] [--port] [--no-browser] [--copilot-root] [--claude-root] [--codex-root] [--pricing]`.
 - Loads the price table once and shares it with all adapters and the server.
-- Loads adapters, runs one `registry.refresh()` and resolves the optional argument (exit code 2 if unknown or ambiguous).
+- Loads adapters, runs one `registry.refresh()` and resolves the optional argument.
+- Exits with code 2 for an invalid price table, an unknown or ambiguous argument, or a port that cannot be bound.
+- Warns on stderr when it binds a non-loopback host.
 - Starts the worker thread and uvicorn.
 - Opens the browser once the server accepts connections.
 
