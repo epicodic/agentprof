@@ -24,6 +24,12 @@ import {
   transcriptRef,
   transcriptScopeLabel,
 } from "../lib/transcript";
+import {
+  START,
+  type TranscriptPosition,
+  type TranscriptPositionAction,
+  transcriptPositionReducer,
+} from "../lib/transcriptPosition";
 import { DetailLink } from "./DetailLink";
 import { MarkdownMessage } from "./MarkdownMessage";
 import { useInspectionMemory, useSessionInteraction } from "./SessionInteraction";
@@ -273,15 +279,11 @@ export function TranscriptSection({
   const prefix = `${node.node_id}:transcript`;
   const [draft, setDraft] = useInspectionMemory(`${prefix}:draft`, () => "");
   const [submitted, setSubmitted] = useInspectionMemory(`${prefix}:submitted`, () => "");
-  const [after, setAfter] = useInspectionMemory<string | null>(`${prefix}:after`, () => null);
-  const [anchor, setAnchor] = useInspectionMemory<string | null>(`${prefix}:anchor`, () => null);
-  const [explicitAnchorOwner, setExplicitAnchorOwner] = useInspectionMemory<string | null>(
-    `${prefix}:explicit-anchor-owner`,
-    () => null,
-  );
-  const [retainedAnchor, setRetainedAnchor] = useInspectionMemory<string | null>(
-    `${prefix}:retained-anchor`,
-    () => null,
+  const [position, setPosition] = useInspectionMemory<TranscriptPosition>(`${prefix}:position`, () => START);
+  const { after, anchor, explicitAnchorOwner, retainedAnchor } = position;
+  const move = useCallback(
+    (action: TranscriptPositionAction) => setPosition((old) => transcriptPositionReducer(old, action)),
+    [setPosition],
   );
   const [expandedIds, setExpandedIds] = useInspectionMemory<string[]>(`${prefix}:expanded`, () => []);
   const [followLatest, setFollowLatest] = useInspectionMemory(`${prefix}:follow`, () => false);
@@ -331,28 +333,22 @@ export function TranscriptSection({
       return;
     setHandledRequest(request.version);
     setSubmitted("");
-    setAfter(null);
-    setRetainedAnchor(null);
-    setExplicitAnchorOwner(transcriptRefRequest.ownerId);
     pauseLocalFollow();
     setFilter(null);
     const entryId = transcriptRefRequest.entryId;
     pendingExplicitScroll.current = { version: request.version, entryId, ownerId: transcriptRefRequest.ownerId };
-    setAnchor(entryId);
+    move({ type: "openEntry", entryId, ownerId: transcriptRefRequest.ownerId });
     setExpandedIds((old) => (old.includes(entryId) ? old : [...old, entryId]));
   }, [
     handledRequest,
     interaction?.restoringHistory,
     request,
-    setAfter,
-    setAnchor,
+    move,
     setExpandedIds,
-    setExplicitAnchorOwner,
     setFilter,
     setHandledRequest,
     pauseLocalFollow,
     setSubmitted,
-    setRetainedAnchor,
     transcriptRefRequest,
     transcriptRequest,
   ]);
@@ -376,10 +372,7 @@ export function TranscriptSection({
     setHandledFilterRequest(request.version);
     setFilter(invocationRequest);
     setSubmitted("");
-    setAfter(null);
-    setAnchor(null);
-    setRetainedAnchor(null);
-    setExplicitAnchorOwner(null);
+    move({ type: "restart" });
     pauseLocalFollow();
   }, [
     active,
@@ -388,13 +381,10 @@ export function TranscriptSection({
     invocationRequest,
     node.node_id,
     request,
-    setAfter,
-    setAnchor,
-    setExplicitAnchorOwner,
+    move,
     setFilter,
     pauseLocalFollow,
     setHandledFilterRequest,
-    setRetainedAnchor,
     setSubmitted,
   ]);
 
@@ -416,10 +406,7 @@ export function TranscriptSection({
     };
     restore(`${prefix}:draft`, setDraft);
     restore(`${prefix}:submitted`, setSubmitted);
-    restore(`${prefix}:after`, setAfter);
-    restore(`${prefix}:anchor`, setAnchor);
-    restore(`${prefix}:explicit-anchor-owner`, setExplicitAnchorOwner);
-    restore(`${prefix}:retained-anchor`, setRetainedAnchor);
+    restore(`${prefix}:position`, setPosition);
     restore(`${prefix}:expanded`, setExpandedIds);
     restore(`${prefix}:follow`, setFollowLatest);
     restore(`${prefix}:search-whole`, setSearchWholeSession);
@@ -433,9 +420,7 @@ export function TranscriptSection({
     interaction?.memory,
     interaction?.restorationVersion,
     prefix,
-    setAfter,
-    setAnchor,
-    setExplicitAnchorOwner,
+    setPosition,
     setDraft,
     setExpandedIds,
     setFilter,
@@ -443,7 +428,6 @@ export function TranscriptSection({
     setFollowLatest,
     setHandledRequest,
     setHandledFilterRequest,
-    setRetainedAnchor,
     setSearchWholeSession,
     setSubmittedWholeSession,
     setLastFollowedEntry,
@@ -523,10 +507,7 @@ export function TranscriptSection({
         })
       : queryKeys.transcriptPage(sessionId, basePageOptions);
     void queryClient.invalidateQueries({ queryKey, exact: true, refetchType: "none" });
-    setAfter(null);
-    setAnchor(null);
-    setExplicitAnchorOwner(null);
-    setRetainedAnchor(null);
+    move({ type: "restart" });
   };
 
   useLayoutEffect(() => {
@@ -549,7 +530,7 @@ export function TranscriptSection({
         retainedAnchor !== saved.entryId &&
         !page.data?.entries.some((entry) => entry.entry_id === saved.entryId)
       ) {
-        setRetainedAnchor(saved.entryId);
+        move({ type: "retain", entryId: saved.entryId });
         return;
       }
       const frame = window.requestAnimationFrame(() => {
@@ -563,7 +544,7 @@ export function TranscriptSection({
       return () => window.cancelAnimationFrame(frame);
     }
     previousFetching.current = isFetching;
-  }, [active, after, anchor, isFetching, page.data, panelRef, retainedAnchor, searching, setRetainedAnchor]);
+  }, [active, after, anchor, isFetching, move, page.data, panelRef, retainedAnchor, searching]);
 
   useLayoutEffect(() => {
     if (interaction?.restoringHistory) {
@@ -607,15 +588,13 @@ export function TranscriptSection({
     )
       return;
     if (page.data.next_cursor !== null) {
-      setAnchor(null);
-      setRetainedAnchor(null);
-      setAfter(page.data.next_cursor);
+      move({ type: "advance", cursor: page.data.next_cursor });
       return;
     }
     const newest = page.data.entries.at(-1)?.entry_id;
     if (newest !== undefined && newest !== lastFollowedEntry) {
       setLastFollowedEntry(newest);
-      setAnchor(newest);
+      move({ type: "follow", entryId: newest });
     }
   }, [
     active,
@@ -624,10 +603,8 @@ export function TranscriptSection({
     searching,
     page.data,
     lastFollowedEntry,
-    setAfter,
-    setAnchor,
+    move,
     setLastFollowedEntry,
-    setRetainedAnchor,
     request,
     transcriptRequest,
   ]);
@@ -672,10 +649,7 @@ export function TranscriptSection({
     const query = draft.trim();
     if (query.length === 0) return;
     setSubmitted(query);
-    setAfter(null);
-    setAnchor(null);
-    setExplicitAnchorOwner(null);
-    setRetainedAnchor(null);
+    move({ type: "restart" });
     setFollowLatest(false);
     setSubmittedWholeSession(searchWholeSession);
   };
@@ -701,8 +675,7 @@ export function TranscriptSection({
               variant="subtle"
               onClick={() => {
                 setSubmitted("");
-                setAfter(null);
-                setRetainedAnchor(null);
+                move({ type: "leaveSearch" });
               }}
             >
               Clear search
@@ -738,10 +711,7 @@ export function TranscriptSection({
               variant="subtle"
               onClick={() => {
                 setFilter(null);
-                setAfter(null);
-                setAnchor(null);
-                setExplicitAnchorOwner(null);
-                setRetainedAnchor(null);
+                move({ type: "restart" });
               }}
             >
               Clear invocation filter
@@ -757,8 +727,7 @@ export function TranscriptSection({
             onClick={() => {
               if (!followLatest) {
                 setSubmitted("");
-                setAfter(null);
-                setRetainedAnchor(null);
+                move({ type: "leaveSearch" });
               }
               setFollowLatest((value) => {
                 const next = !value;
@@ -866,10 +835,7 @@ export function TranscriptSection({
             variant="light"
             disabled={metadata.previous_cursor === null}
             onClick={() => {
-              setAnchor(null);
-              setExplicitAnchorOwner(null);
-              setAfter(metadata.previous_cursor);
-              setRetainedAnchor(null);
+              move({ type: "page", cursor: metadata.previous_cursor });
             }}
           >
             Previous
@@ -879,10 +845,7 @@ export function TranscriptSection({
             variant="light"
             disabled={metadata.next_cursor === null}
             onClick={() => {
-              setAnchor(null);
-              setExplicitAnchorOwner(null);
-              setAfter(metadata.next_cursor);
-              setRetainedAnchor(null);
+              move({ type: "page", cursor: metadata.next_cursor });
             }}
           >
             Next

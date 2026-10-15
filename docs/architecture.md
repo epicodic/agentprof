@@ -47,6 +47,7 @@ frontend/src/
   api/                    # fetch client, query hooks, SSE handling, generated schema.ts
   pages/                  # SessionListPage (/), SessionPage (/sessions/:id)
   components/             # React components; see "Frontend" below
+  hooks/                  # session-view state: split, follow latest, history, reveals, navigation, scope
   lib/                    # pure logic with unit tests; see "Frontend" below
   test/                   # test data factories and workflow fixtures
 frontend/e2e/             # Playwright specs
@@ -244,6 +245,8 @@ Behaviour:
 - `pnpm --dir frontend build` writes the bundle into `src/agentprof/server/static/`, which ships in the wheel.
 - `pnpm --dir frontend dev` proxies `/api` to a running `agentprof` on port 8765.
 - Put new logic in `lib/` as pure, tested functions; keep components to layout and wiring.
+- `SessionView` composes its state from hooks in `hooks/`; each hook's decisions live in a pure, unit-tested module in `lib/` (`treeReveal`, `followLatest`, `historyRestoration`, `destinationSequence`, `transcriptPosition`).
+- New session-view state goes into the hook it belongs to, with its decisions in a `lib/` function and a Vitest test; the Playwright specs cover the wiring.
 
 ```
 main.tsx          MantineProvider -> QueryClientProvider -> BrowserRouter -> App
@@ -253,7 +256,7 @@ pages/
   SessionPage       loads one session, renders SessionView
 components/
   session workspace
-    SessionView         inspection, selection, scope, follow mode, history and split-pane state
+    SessionView         composes the hooks for inspection, selection, scope, follow mode, history and split-pane state
     SessionInteraction  shared interaction context and inspection memory
     SessionHeader       title, badges, headline figures, diagnostics
     WorkflowToolbar     scope, activity filter and follow-latest controls

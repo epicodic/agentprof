@@ -11,9 +11,10 @@ import {
   type SortingState,
   useReactTable,
 } from "@tanstack/react-table";
-import { useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef } from "react";
 import { useLocation } from "react-router";
 import type { AgentSummaryRowOut, CostOut, MetricOut, NodeOut } from "../api/types";
+import { useRememberedState } from "../hooks/useRememberedState";
 import { agentNode, callRef, eventRef, relationsToNodes } from "../lib/entities";
 import { formatCost, formatDuration, formatTokens, MISSING, truncateTitle, withProvenance } from "../lib/format";
 import { colorForMetric, metricScale } from "../lib/metricColor";
@@ -44,6 +45,10 @@ interface AgentRow {
   tokensOutput: MetricOut;
   cacheTtl: string;
   resumeCount: number;
+}
+
+function isList<T extends unknown[]>(value: unknown): value is T {
+  return Array.isArray(value);
 }
 
 function tableRows(agents: readonly AgentSummaryRowOut[], nodes: ReadonlyMap<number, NodeOut>): AgentRow[] {
@@ -399,14 +404,6 @@ export function AgentSummaryTable({
     actions.push({ id: "copy", label: "Copy link", run: () => interaction.copyLink(ref) });
     return actions;
   });
-  const [sorting, setSortingState] = useState<SortingState>(() => {
-    const saved = interaction?.memory.get("agent-summary:sorting");
-    return Array.isArray(saved) ? (saved as SortingState) : [{ id: "agentId", desc: false }];
-  });
-  const [expandedMetrics, setExpandedMetricsState] = useState<number[]>(() => {
-    const saved = interaction?.memory.get("agent-summary:expanded-metrics");
-    return Array.isArray(saved) ? (saved as number[]) : [];
-  });
   const interactionRef = useRef(interaction);
   interactionRef.current = interaction;
   const saveCurrentSnapshot = () => {
@@ -415,39 +412,18 @@ export function AgentSummaryTable({
     const browserKey = historyState?.key ?? "default";
     if (browserKey === routerLocation.key) interactionRef.current?.saveSnapshot();
   };
-  const sortingRef = useRef(sorting);
-  sortingRef.current = sorting;
-  const updateSorting = (next: SortingState | ((previous: SortingState) => SortingState)) => {
-    const value = typeof next === "function" ? next(sortingRef.current) : next;
-    sortingRef.current = value;
-    interaction?.memory.set("agent-summary:sorting", value);
-    setSortingState(value);
-    saveCurrentSnapshot();
-  };
-  const expandedMetricsRef = useRef(expandedMetrics);
-  expandedMetricsRef.current = expandedMetrics;
-  const updateExpandedMetrics = (next: number[] | ((previous: number[]) => number[])) => {
-    const value = typeof next === "function" ? next(expandedMetricsRef.current) : next;
-    expandedMetricsRef.current = value;
-    interaction?.memory.set("agent-summary:expanded-metrics", value);
-    setExpandedMetricsState(value);
-    saveCurrentSnapshot();
-  };
-  const restoredVersion = useRef(interaction?.restorationVersion ?? 0);
-  useLayoutEffect(() => {
-    if (interaction?.restoringHistory || interaction?.restorationVersion === restoredVersion.current) return;
-    restoredVersion.current = interaction?.restorationVersion ?? 0;
-    const savedSorting = interaction?.memory.get("agent-summary:sorting");
-    const savedMetrics = interaction?.memory.get("agent-summary:expanded-metrics");
-    if (Array.isArray(savedSorting)) {
-      sortingRef.current = savedSorting as SortingState;
-      setSortingState(savedSorting as SortingState);
-    }
-    if (Array.isArray(savedMetrics)) {
-      expandedMetricsRef.current = savedMetrics as number[];
-      setExpandedMetricsState(savedMetrics as number[]);
-    }
-  }, [interaction?.memory, interaction?.restorationVersion, interaction?.restoringHistory]);
+  const [sorting, updateSorting] = useRememberedState<SortingState>(
+    "agent-summary:sorting",
+    () => [{ id: "agentId", desc: false }],
+    isList<SortingState>,
+    saveCurrentSnapshot,
+  );
+  const [expandedMetrics, updateExpandedMetrics] = useRememberedState<number[]>(
+    "agent-summary:expanded-metrics",
+    () => [],
+    isList<number[]>,
+    saveCurrentSnapshot,
+  );
   const tableColumns = useMemo(
     () =>
       columns(
@@ -534,7 +510,7 @@ export function AgentSummaryTable({
                   { value: "tokensOutput", label: "Output tokens" },
                 ]}
                 onChange={(event) => {
-                  table.setSorting([{ id: event.currentTarget.value, desc: sortingRef.current[0]?.desc ?? false }]);
+                  table.setSorting((previous) => [{ id: event.currentTarget.value, desc: previous[0]?.desc ?? false }]);
                 }}
               />
               <NativeSelect
@@ -545,8 +521,8 @@ export function AgentSummaryTable({
                   { value: "asc", label: "Ascending" },
                 ]}
                 onChange={(event) => {
-                  table.setSorting([
-                    { id: sortingRef.current[0]?.id ?? "agentId", desc: event.currentTarget.value === "desc" },
+                  table.setSorting((previous) => [
+                    { id: previous[0]?.id ?? "agentId", desc: event.currentTarget.value === "desc" },
                   ]);
                 }}
               />

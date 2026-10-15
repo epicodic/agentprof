@@ -96,6 +96,23 @@ export function workflowAncestors(index: WorkflowIndex, nodeId: string): NodeOut
   return path.reverse();
 }
 
+/** The nodes a scope can be focused on (the scope path and the inspected path, tools excluded), shallowest first. */
+export function scopeChoices(
+  index: WorkflowIndex,
+  scopePath: readonly NodeOut[],
+  inspectedPath: readonly NodeOut[],
+): { node: NodeOut; depth: number }[] {
+  const ids = new Set<string>();
+  for (const node of scopePath) if (node.kind !== "tool") ids.add(node.node_id);
+  for (const node of inspectedPath) if (node.kind !== "tool") ids.add(node.node_id);
+  return [...ids]
+    .flatMap((nodeId) => {
+      const node = index.nodes.get(nodeId);
+      return node === undefined ? [] : [{ node, depth: index.depths.get(nodeId) ?? 0 }];
+    })
+    .sort((a, b) => a.depth - b.depth || a.node.topic.localeCompare(b.node.topic));
+}
+
 export function resolveWorkflowScope(index: WorkflowIndex, scopeId: string | null): WorkflowScope {
   if (scopeId === null) return { root: index.root, unavailable: false };
   const node = index.nodes.get(scopeId);
