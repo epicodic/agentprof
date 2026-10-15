@@ -12,6 +12,7 @@ import {
   detailTab,
   type InspectionLocation,
   markEntityTransition,
+  parseInspection,
   writeInspection,
 } from "../lib/inspectionLocation";
 import { preserveSafeLocalMark } from "../lib/localMarks";
@@ -25,6 +26,7 @@ export interface InspectionNavigation {
   localMark: { viewKey: string; key: string } | null;
   clipboardError: boolean;
   currentParams: () => URLSearchParams;
+  currentLocation: () => InspectionLocation;
   navigateWorkflow: (next: { scopeId?: string | null; activity?: ActivityFilter }, replace: boolean) => void;
   selectEntity: (ref: EntityRef) => void;
   markLocal: (viewKey: string, key: string) => void;
@@ -41,7 +43,6 @@ export function useInspectionNavigation(options: {
   sessionId: string;
   root: NodeOut;
   location: InspectionLocation;
-  selectedNode: NodeOut | null;
   searchParams: URLSearchParams;
   setSearchParams: SetURLSearchParams;
   routerLocation: Location;
@@ -53,13 +54,13 @@ export function useInspectionNavigation(options: {
   setInspectionRequest: (request: InspectionRequest | null) => void;
   commitReveal: (request: RevealRequestOptions) => void;
   queueReveal: (search: string, request: RevealRequestOptions) => void;
+  flushQueuedReveal: () => void;
   clearQueuedReveal: () => void;
 }): InspectionNavigation {
   const {
     sessionId,
     root,
     location,
-    selectedNode,
     searchParams,
     setSearchParams,
     routerLocation,
@@ -71,6 +72,7 @@ export function useInspectionNavigation(options: {
     setInspectionRequest,
     commitReveal,
     queueReveal,
+    flushQueuedReveal,
     clearQueuedReveal,
   } = options;
   const queryState = useRef({ key: routerLocation.key, params: new URLSearchParams(searchParams) });
@@ -81,6 +83,16 @@ export function useInspectionNavigation(options: {
   const localMarkRoot = useRef(root);
   const [clipboardError, setClipboardError] = useState(false);
 
+  // Back/forward changes the URL before the router renders it; follow it so callbacks never navigate from a stale query.
+  useEffect(() => {
+    const onPopState = () => {
+      queryState.current.params = new URLSearchParams(window.location.search);
+      clearQueuedReveal();
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, [clearQueuedReveal]);
+
   useEffect(() => {
     if (localMarkRoot.current === root) return;
     const previousRoot = localMarkRoot.current;
@@ -89,6 +101,12 @@ export function useInspectionNavigation(options: {
   }, [root]);
 
   const currentParams = useCallback(() => queryState.current.params, []);
+  // The location of the latest navigation. A router transition can leave `location` (from the render) behind the URL,
+  // so callbacks that build the next location start from here instead.
+  const currentLocation = useCallback(
+    (): InspectionLocation => parseInspection(sessionId, queryState.current.params),
+    [sessionId],
+  );
 
   const rememberedTab = useCallback(
     (nodeId: string, kind: string): DetailTab => {
@@ -118,18 +136,19 @@ export function useInspectionNavigation(options: {
   const navigateInspection = useCallback(
     (next: typeof location, replace: boolean, revealRequest?: RevealRequestOptions) => {
       const currentParams = queryState.current.params;
-      const currentSearch = writeInspection(currentParams, location).toString();
+      const currentSearch = writeInspection(currentParams, currentLocation()).toString();
       const nextParams = writeInspection(currentParams, next);
       const nextSearch = nextParams.toString();
+      // A reveal queued by the previous navigation has not seen its URL rendered yet; commit it instead of dropping it.
+      flushQueuedReveal();
       if (revealRequest !== undefined && nextSearch !== currentSearch) queueReveal(nextSearch, revealRequest);
-      else clearQueuedReveal();
       saveSnapshot();
       if (replace) keepReplaceBaseline();
       queryState.current.params = new URLSearchParams(nextParams);
       setSearchParams(nextParams, { replace });
       if (revealRequest !== undefined && nextSearch === currentSearch) commitReveal(revealRequest);
     },
-    [clearQueuedReveal, commitReveal, keepReplaceBaseline, location, queueReveal, saveSnapshot, setSearchParams],
+    [commitReveal, currentLocation, flushQueuedReveal, keepReplaceBaseline, queueReveal, saveSnapshot, setSearchParams],
   );
 
   const selectEntity = useCallback(
@@ -137,24 +156,38 @@ export function useInspectionNavigation(options: {
       pauseFollow();
       const entity = resolveEntity(root, sessionId, ref);
       if (entity === null) return;
-      const transition = markEntityTransition(location, ref, selectedNode?.kind);
+      flushQueuedReveal();
+      const latest = currentLocation();
+      const latestNode = latest.nodeId === null ? null : findNode(root, latest.nodeId);
+      const transition = markEntityTransition(latest, ref, latestNode?.kind);
       setLocalMark(null);
       setInspectionRequest(transition.inspectionRequest);
       navigateInspection(transition.location, true);
     },
-    [pauseFollow, root, sessionId, location, navigateInspection, selectedNode?.kind, setInspectionRequest],
+    [
+      flushQueuedReveal,
+      pauseFollow,
+      root,
+      sessionId,
+      currentLocation,
+      navigateInspection,
+
+      setInspectionRequest,
+    ],
   );
 
   const markLocal = useCallback(
     (viewKey: string, key: string) => {
       pauseFollow();
+      flushQueuedReveal();
       setLocalMark({ viewKey, key });
       setInspectionRequest(null);
-      if (location.selection !== null || location.invalidSelection) {
-        navigateInspection({ ...location, selection: null, invalidSelection: false }, true);
+      const latest = currentLocation();
+      if (latest.selection !== null || latest.invalidSelection) {
+        navigateInspection({ ...latest, selection: null, invalidSelection: false }, true);
       }
     },
-    [location, navigateInspection, pauseFollow, setInspectionRequest],
+    [currentLocation, flushQueuedReveal, navigateInspection, pauseFollow, setInspectionRequest],
   );
 
   const openEntity = useCallback(
@@ -166,7 +199,7 @@ export function useInspectionNavigation(options: {
       setLocalMark(null);
       rememberCurrentTab();
       const next = {
-        ...location,
+        ...currentLocation(),
         nodeId: entity.node.node_id,
         tab:
           destinationTab ??
@@ -186,7 +219,7 @@ export function useInspectionNavigation(options: {
         tab: next.tab,
       });
     },
-    [pauseFollow, root, sessionId, location, navigateInspection, rememberCurrentTab, rememberedTab],
+    [pauseFollow, root, sessionId, currentLocation, navigateInspection, rememberCurrentTab, rememberedTab],
   );
 
   const openNode = useCallback(
@@ -201,27 +234,29 @@ export function useInspectionNavigation(options: {
   const changeTab = useCallback(
     (tab: DetailTab) => {
       pauseFollow();
-      if (selectedNode !== null) memory.set(`tab:${selectedNode.node_id}`, detailTab(selectedNode.kind, tab));
-      navigateInspection({ ...location, tab }, true);
+      const latest = currentLocation();
+      const node = latest.nodeId === null ? null : findNode(root, latest.nodeId);
+      if (node !== null) memory.set(`tab:${node.node_id}`, detailTab(node.kind, tab));
+      navigateInspection({ ...latest, tab }, true);
     },
-    [location, memory, navigateInspection, pauseFollow, selectedNode],
+    [currentLocation, memory, navigateInspection, pauseFollow, root],
   );
 
   const closeDetails = useCallback(() => {
     pauseFollow();
     rememberCurrentTab();
-    navigateInspection({ ...location, nodeId: null, tab: null }, true);
-  }, [location, navigateInspection, pauseFollow, rememberCurrentTab]);
+    navigateInspection({ ...currentLocation(), nodeId: null, tab: null }, true);
+  }, [currentLocation, navigateInspection, pauseFollow, rememberCurrentTab]);
 
   const clearSelection = useCallback(() => {
     pauseFollow();
-    navigateInspection({ ...location, selection: null, invalidSelection: false }, true);
+    navigateInspection({ ...currentLocation(), selection: null, invalidSelection: false }, true);
     setLocalMark(null);
-  }, [location, navigateInspection, pauseFollow]);
+  }, [currentLocation, navigateInspection, pauseFollow]);
 
   const copyLink = useCallback(
     (ref: EntityRef) => {
-      const link = detailLink(routerLocation.pathname, searchParams, ref);
+      const link = detailLink(routerLocation.pathname, queryState.current.params, ref);
       try {
         void navigator.clipboard.writeText(link).then(
           () => setClipboardError(false),
@@ -231,7 +266,7 @@ export function useInspectionNavigation(options: {
         setClipboardError(true);
       }
     },
-    [routerLocation.pathname, searchParams],
+    [routerLocation.pathname],
   );
 
   useEffect(() => {
@@ -250,16 +285,18 @@ export function useInspectionNavigation(options: {
       )
         return;
       if (window.getSelection()?.toString()) return;
-      if (location.selection !== null || location.invalidSelection || localMark !== null) clearSelection();
+      const latest = currentLocation();
+      if (latest.selection !== null || latest.invalidSelection || localMark !== null) clearSelection();
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [clearSelection, localMark, location.invalidSelection, location.selection]);
+  }, [clearSelection, currentLocation, localMark]);
 
   return {
     localMark,
     clipboardError,
     currentParams,
+    currentLocation,
     navigateWorkflow,
     selectEntity,
     markLocal,

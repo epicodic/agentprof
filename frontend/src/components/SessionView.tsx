@@ -14,7 +14,7 @@ import { useWorkflowScope } from "../hooks/useWorkflowScope";
 import { useWorkspaceSplit } from "../hooks/useWorkspaceSplit";
 import { agentNode, resolveEntity } from "../lib/entities";
 import { totalTokens } from "../lib/format";
-import { detailTab, parseInspection } from "../lib/inspectionLocation";
+import { detailTab, type InspectionLocation, parseInspection } from "../lib/inspectionLocation";
 import { metricScale } from "../lib/metricColor";
 import { nodeSpan, zoom } from "../lib/timeline";
 import {
@@ -158,10 +158,14 @@ export function SessionView({ session, fetchedAtMs }: { session: SessionOut; fet
     [pauseFollow],
   );
 
+  // The navigation hook needs rememberCurrentTab and rememberCurrentTab needs the hook's latest location, so it reads
+  // the getter through a ref that is set right after the hook runs.
+  const latestLocation = useRef<() => InspectionLocation>(() => location);
   const rememberCurrentTab = useCallback(() => {
-    if (selectedNode === null) return;
-    memory.set(`tab:${selectedNode.node_id}`, detailTab(selectedNode.kind, location.tab));
-  }, [location.tab, memory, selectedNode]);
+    const latest = latestLocation.current();
+    const node = latest.nodeId === null ? null : findNode(root, latest.nodeId);
+    if (node !== null) memory.set(`tab:${node.node_id}`, detailTab(node.kind, latest.tab));
+  }, [memory, root]);
 
   const capture = useCallback((): HistorySnapshot => {
     rememberCurrentTab();
@@ -197,7 +201,7 @@ export function SessionView({ session, fetchedAtMs }: { session: SessionOut; fet
     onBeforePop: pauseFollow,
   });
 
-  const { commitReveal, queueReveal, clearQueuedReveal, queueWorkflowReveal } = useRevealRequests({
+  const { commitReveal, queueReveal, flushQueuedReveal, clearQueuedReveal, queueWorkflowReveal } = useRevealRequests({
     root,
     searchParams,
     navigationType,
@@ -213,6 +217,7 @@ export function SessionView({ session, fetchedAtMs }: { session: SessionOut; fet
     localMark,
     clipboardError,
     currentParams,
+    currentLocation,
     navigateWorkflow,
     selectEntity,
     markLocal,
@@ -226,7 +231,6 @@ export function SessionView({ session, fetchedAtMs }: { session: SessionOut; fet
     sessionId: session.id,
     root,
     location,
-    selectedNode,
     searchParams,
     setSearchParams,
     routerLocation,
@@ -238,8 +242,11 @@ export function SessionView({ session, fetchedAtMs }: { session: SessionOut; fet
     setInspectionRequest,
     commitReveal,
     queueReveal,
+    flushQueuedReveal,
     clearQueuedReveal,
   });
+
+  latestLocation.current = currentLocation;
 
   const {
     pendingScope,
