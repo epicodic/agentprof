@@ -33,6 +33,7 @@ export function useRevealRequests(options: {
 }): {
   commitReveal: (request: RevealRequestOptions) => void;
   queueReveal: (search: string, request: RevealRequestOptions) => void;
+  flushQueuedReveal: () => void;
   clearQueuedReveal: () => void;
   queueWorkflowReveal: (search: string, target: string) => void;
 } {
@@ -81,6 +82,15 @@ export function useRevealRequests(options: {
   const clearQueuedReveal = useCallback(() => {
     pendingReveal.current = null;
   }, []);
+  /**
+   * Commits and clears a reveal whose URL has not rendered yet, so a newer navigation does not lose it. It commits with
+   * render-time root/visibleRows/inspectedNodeId/memory, which is acceptable because the reveal targets a state already navigated to.
+   */
+  const flushQueuedReveal = useCallback(() => {
+    const queued = pendingReveal.current;
+    pendingReveal.current = null;
+    if (queued !== null) commitReveal(queued);
+  }, [commitReveal]);
   const queueWorkflowReveal = useCallback((search: string, target: string) => {
     pendingWorkflowReveal.current = { search, target };
   }, []);
@@ -111,5 +121,5 @@ export function useRevealRequests(options: {
     dispatchTreeReveal({ type: "revealWorkflow", target: queued.target, keys: [queued.target] });
   }, [dispatchTreeReveal, navigationType, searchParams]);
 
-  return { commitReveal, queueReveal, clearQueuedReveal, queueWorkflowReveal };
+  return { commitReveal, queueReveal, flushQueuedReveal, clearQueuedReveal, queueWorkflowReveal };
 }
