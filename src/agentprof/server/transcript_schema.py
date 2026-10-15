@@ -15,7 +15,7 @@ from agentprof.model import (
     TranscriptEntry,
     TranscriptKind,
 )
-from agentprof.server.schemas import FindingReferenceOut, MetricOut, finding_reference_out, metric_out
+from agentprof.server.schemas import FindingReferenceOut, MetricOut
 
 
 class TranscriptCoverageOut(BaseModel):
@@ -116,7 +116,7 @@ def transcript_entry_out(entry: TranscriptEntry) -> TranscriptEntryOut:
         block_position=entry.block_position,
         native_id=entry.native_id,
         native_ordinal=entry.native_ordinal,
-        timestamp=metric_out(entry.timestamp),
+        timestamp=entry.timestamp,
         kind=entry.kind,
         role=entry.role,
         sender=entry.sender[:240] if entry.sender is not None else None,
@@ -138,7 +138,7 @@ def transcript_detail_out(index: SessionIndex, entry: TranscriptEntry) -> Transc
         invocation_id=entry.invocation_id,
         event_id=entry.event_id,
         subject_node_id=entry.subject_node_id,
-        references=[finding_reference_out(reference) for reference in supporting_references(index, entry)],
+        references=supporting_references(index, entry),
     )
 
 
@@ -164,7 +164,7 @@ def transcript_hit_out(hit: TranscriptHit) -> TranscriptSearchHitOut:
         recipient=entry.recipient[:240] if entry.recipient is not None else None,
         ownership_evidence=entry.ownership_evidence,
         channel=entry.channel,
-        timestamp=metric_out(entry.timestamp),
+        timestamp=entry.timestamp,
         block_position=hit.block_position,
         snippet=hit.snippet,
     )
