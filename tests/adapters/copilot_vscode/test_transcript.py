@@ -91,3 +91,27 @@ def test_load_transcript_reads_timestamps_without_offset_as_utc(tmp_path: Path) 
     transcript = load_transcript(path)
 
     assert transcript.tool_timings["c1"].start_ms == _T0 + 40
+
+
+def test_load_transcript_keeps_malformed_line_details(tmp_path: Path) -> None:
+    path = tmp_path / "t.jsonl"
+    path.write_text(
+        '{"type": "session.start", "timestamp": "2026-01-01T00:00:00Z", "data": {"sessionId": "s"}}\n{"broken\n'
+    )
+
+    transcript = load_transcript(path)
+
+    assert transcript.malformed_lines == 1
+    assert transcript.malformed_line_details[0].line_number == 2
+
+
+def test_load_transcript_keeps_a_line_separator_inside_a_string(tmp_path: Path) -> None:
+    path = tmp_path / "t.jsonl"
+    path.write_bytes(
+        b'{"type": "user.message", "timestamp": "2026-01-01T00:00:00Z", "data": {"content": "a\xe2\x80\xa8b"}}\n'
+    )
+
+    transcript = load_transcript(path)
+
+    assert transcript.malformed_lines == 0
+    assert len(transcript.native_records) == 1

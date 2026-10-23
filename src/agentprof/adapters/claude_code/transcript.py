@@ -2,16 +2,13 @@
 # Copyright (c) 2026 epicodic
 """Parse one Claude Code transcript file: the main session or one subagent."""
 
-import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from agentprof.adapters.common import MalformedLines, iter_jsonl
 from agentprof.adapters.timestamps import parse_iso_ms
 from agentprof.model import MalformedLineDetail, TranscriptBlock, TranscriptKind
-
-_MAX_MALFORMED_LINE_DETAILS = 20
-_MAX_EXCERPT_LENGTH = 120
 
 
 @dataclass
@@ -101,53 +98,6 @@ class Transcript:
     malformed_line_details: list[MalformedLineDetail] = field(default_factory=list)
 
 
-def _redacted_excerpt(line: str) -> str:
-    """Retain short JSON syntax shape while removing all string and scalar contents."""
-    parts: list[str] = []
-    in_string = False
-    escaped = False
-    redacting_scalar = False
-    for char in line[:_MAX_EXCERPT_LENGTH]:
-        if in_string:
-            if escaped:
-                escaped = False
-            elif char == "\\":
-                escaped = True
-            elif char == '"':
-                parts.append('"')
-                in_string = False
-            continue
-        if char == '"':
-            parts.append('"[redacted]')
-            in_string = True
-            redacting_scalar = False
-        elif char in "{}[]:,":
-            parts.append(char)
-            redacting_scalar = False
-        elif char.isspace():
-            parts.append(" ")
-            redacting_scalar = False
-        elif not redacting_scalar:
-            parts.append("[redacted]")
-            redacting_scalar = True
-    excerpt = "".join(parts)
-    if len(line) > _MAX_EXCERPT_LENGTH:
-        return excerpt[: _MAX_EXCERPT_LENGTH - 1] + "…"
-    return excerpt[:_MAX_EXCERPT_LENGTH]
-
-
-def _error_category(error: json.JSONDecodeError | AttributeError | KeyError | TypeError | ValueError) -> str:
-    if isinstance(error, json.JSONDecodeError):
-        return "invalid_json"
-    if isinstance(error, KeyError):
-        return "missing_field"
-    if isinstance(error, TypeError) and str(error) == "transcript line is not a JSON object":
-        return "non_object"
-    if isinstance(error, (TypeError, AttributeError)):
-        return "invalid_type"
-    return "invalid_value"
-
-
 def _text_of(content: object) -> str:
     """Plain text of a message or tool result `content`: a string or a list of blocks."""
     if isinstance(content, str):
@@ -168,7 +118,13 @@ def _blocks(content: object) -> list[dict[str, Any]]:
 
 
 class _Parser:
-    def __init__(self, source_stream_id: str | None = None, native_source_stream_id: str | None = None) -> None:
+    def __init__(
+        self,
+        source_stream_id: str | None = None,
+        native_source_stream_id: str | None = None,
+        *,
+        retain_native: bool = True,
+    ) -> None:
         self.transcript = Transcript()
         self.transcript.source_stream_id = source_stream_id
         self.transcript.native_source_stream_id = native_source_stream_id
@@ -176,11 +132,12 @@ class _Parser:
         self._seen_tool_uses: set[str] = set()
         self._pending_next_calls: list[ToolResult] = []
         self._source_order = 0
+        self._retain_native_records = retain_native
 
     def feed(self, entry: dict[str, Any], physical_position: int | None = None) -> None:
         source_order = self._source_order
         self._source_order += 1
-        if physical_position is not None:
+        if physical_position is not None and self._retain_native_records:
             self._retain_native(entry, physical_position, source_order)
         entry_type = entry.get("type")
         if entry_type == "ai-title":
@@ -433,33 +390,25 @@ class _Parser:
         )
 
 
-def load_transcript(path: Path) -> Transcript:
-    """Parse one transcript file; malformed lines are skipped and counted."""
+def load_transcript(path: Path, *, retain_native: bool = True) -> Transcript:
+    """Parse one transcript file; malformed lines are skipped and counted.
+
+    `retain_native=False` skips `native_records`, the transcript entries only `analyze` needs.
+    """
     logical_stream_id = f"claude-code:{path.stem}"
     source_parts = path.parts[-4:] if path.parent.name == "subagents" else path.parts[-2:]
     relative_source = "/".join(source_parts)
     parser = _Parser(
         source_stream_id=logical_stream_id,
         native_source_stream_id=f"claude-code-source:{relative_source}",
+        retain_native=retain_native,
     )
-    with path.open(encoding="utf-8") as source:
-        for line_number, line in enumerate(source, start=1):
-            if not line.strip():
-                continue
-            try:
-                entry = json.loads(line)
-                if not isinstance(entry, dict):
-                    raise TypeError("transcript line is not a JSON object")
-                parser.feed(entry, line_number)
-            except (json.JSONDecodeError, AttributeError, KeyError, TypeError, ValueError) as error:
-                parser.transcript.malformed_lines += 1
-                if len(parser.transcript.malformed_line_details) < _MAX_MALFORMED_LINE_DETAILS:
-                    parser.transcript.malformed_line_details.append(
-                        MalformedLineDetail(
-                            source_path=str(path),
-                            line_number=line_number,
-                            excerpt=_redacted_excerpt(line.rstrip("\r\n")),
-                            error_category=_error_category(error),
-                        )
-                    )
+    malformed = MalformedLines()
+    for line in iter_jsonl(path, malformed):
+        try:
+            parser.feed(line.value, line.number)
+        except (AttributeError, KeyError, TypeError, ValueError) as error:
+            malformed.add(path, line.number, line.text, error)
+    parser.transcript.malformed_lines = malformed.count
+    parser.transcript.malformed_line_details = malformed.details
     return parser.transcript

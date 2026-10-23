@@ -6,16 +6,16 @@ from typing import Any
 
 from pydantic import BaseModel
 
+from agentprof.analysis.session_index import SessionIndex
 from agentprof.analysis.transcripts import TranscriptHit, preview, scope_coverage, supporting_references
 from agentprof.model import (
-    Node,
     TranscriptAvailability,
     TranscriptBlock,
     TranscriptCoverage,
     TranscriptEntry,
     TranscriptKind,
 )
-from agentprof.server.schemas import FindingReferenceOut, MetricOut, finding_reference_out, metric_out
+from agentprof.server.schemas import FindingReferenceOut, MetricOut
 
 
 class TranscriptCoverageOut(BaseModel):
@@ -116,7 +116,7 @@ def transcript_entry_out(entry: TranscriptEntry) -> TranscriptEntryOut:
         block_position=entry.block_position,
         native_id=entry.native_id,
         native_ordinal=entry.native_ordinal,
-        timestamp=metric_out(entry.timestamp),
+        timestamp=entry.timestamp,
         kind=entry.kind,
         role=entry.role,
         sender=entry.sender[:240] if entry.sender is not None else None,
@@ -128,17 +128,17 @@ def transcript_entry_out(entry: TranscriptEntry) -> TranscriptEntryOut:
     )
 
 
-def transcript_detail_out(root: Node, entry: TranscriptEntry) -> TranscriptEntryDetailOut:
+def transcript_detail_out(index: SessionIndex, entry: TranscriptEntry) -> TranscriptEntryDetailOut:
     return TranscriptEntryDetailOut(
         **transcript_entry_out(entry).model_dump(),
         blocks=[transcript_block_out(block) for block in entry.blocks],
-        coverage=coverage_out(scope_coverage(root, entry.owner_id)),
+        coverage=coverage_out(scope_coverage(index, entry.owner_id)),
         logical_stream_id=entry.logical_stream_id,
         source_request_id=entry.source_request_id,
         invocation_id=entry.invocation_id,
         event_id=entry.event_id,
         subject_node_id=entry.subject_node_id,
-        references=[finding_reference_out(reference) for reference in supporting_references(root, entry)],
+        references=supporting_references(index, entry),
     )
 
 
@@ -164,7 +164,7 @@ def transcript_hit_out(hit: TranscriptHit) -> TranscriptSearchHitOut:
         recipient=entry.recipient[:240] if entry.recipient is not None else None,
         ownership_evidence=entry.ownership_evidence,
         channel=entry.channel,
-        timestamp=metric_out(entry.timestamp),
+        timestamp=entry.timestamp,
         block_position=hit.block_position,
         snippet=hit.snippet,
     )

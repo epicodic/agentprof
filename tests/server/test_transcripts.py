@@ -182,6 +182,10 @@ def test_disappeared_cursor_entry_returns_conflict_and_search_cursor_binds_query
     client = TestClient(create_app(registry))
     path = "/api/sessions/synthetic:one/transcript"
     first = client.get(path, params={"limit": 2}).json()
+    # A changed transcript is a new analysis, so drop the entry in a fresh registry, not in the memoised one.
+    registry = Registry([_TranscriptAdapter()])
+    registry.refresh()
+    client = TestClient(create_app(registry))
     session, _ = registry.session("synthetic:one")
     session.root.transcript_entries = session.root.transcript_entries[2:]
 

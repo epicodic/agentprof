@@ -14,7 +14,7 @@ from agentprof.adapters.claude_code.transcript import (
     Transcript,
     load_transcript,
 )
-from agentprof.adapters.claude_code.tree import build_root, first_line, usage_of
+from agentprof.adapters.claude_code.tree import _tool_event_owner, build_root, first_line, usage_of
 from agentprof.analysis.rollup import roll_up
 from agentprof.model import Metric, Node, NodeKind, Provenance, Tokens, ToolCategory, iter_nodes
 from agentprof.pricing import PriceTable, Usage
@@ -680,3 +680,24 @@ def test_build_root_keeps_synthetic_messages_out_of_the_context() -> None:
     root = build_root(main, [], PriceTable.load(), "t")
 
     assert [call.in_context for call in root.children[0].llm_calls] == [True, False]
+
+
+def test_tool_event_owner() -> None:
+    root = Node(node_id="root", kind=NodeKind.SESSION, topic="s")
+    turn = Node(node_id="turn", kind=NodeKind.TURN, topic="t", start=Metric.exact(100))
+    agent = Node(node_id="agent", kind=NodeKind.AGENT, topic="a")
+    tool = Node(node_id="tool", kind=NodeKind.TOOL, topic="Read")
+    turn.children = [tool]
+    root.children = [turn]
+    main, sub, orphan = Transcript(), Transcript(), Transcript()
+    parents = {id(tool): turn}
+    owners = {id(sub): agent}
+
+    def owner(transcript: Transcript, timestamp_ms: int, node: Node | None, turns: list[Node]) -> Node | None:
+        return _tool_event_owner(transcript, timestamp_ms, node, parents, [sub, orphan], owners, turns, root)
+
+    assert owner(main, 150, tool, [turn]) is turn  # parent of a known tool node
+    assert owner(sub, 150, None, [turn]) is agent  # subagent transcript: its agent
+    assert owner(orphan, 150, None, [turn]) is None  # subagent transcript without an agent: dropped
+    assert owner(main, 150, None, [turn]) is turn  # main transcript: the turn at that time
+    assert owner(main, 50, None, []) is root  # no turn at that time: the session

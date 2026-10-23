@@ -4,7 +4,13 @@
 import { describe, expect, it } from "vitest";
 import { makeCall, makeNode, makeTool, metric } from "../test/factories";
 import { deepWorkflow } from "../test/workflowFixtures";
-import { buildWorkflowIndex, resolveWorkflowScope, workflowAncestors, workflowVisibility } from "./workflowScope";
+import {
+  buildWorkflowIndex,
+  resolveWorkflowScope,
+  scopeChoices,
+  workflowAncestors,
+  workflowVisibility,
+} from "./workflowScope";
 
 describe("buildWorkflowIndex", () => {
   it("retains only a matching branch and its contextual ancestors", () => {
@@ -77,5 +83,21 @@ describe("buildWorkflowIndex", () => {
     expect(resolveWorkflowScope(index, "unknown").root).toBe(root);
     expect(workflowVisibility(index, "missing", "all").visible.size).toBe(4);
     expect(workflowVisibility(index, "deep-0", "failed").visible).toEqual(new Set());
+  });
+});
+
+describe("scopeChoices", () => {
+  it("merges both paths without duplicates or tools, shallowest first", () => {
+    const inner = makeNode({ node_id: "inner", kind: "agent", agent_id: 4 });
+    const wrapper = makeTool("wrapper", "wrapper", { children: [inner] });
+    const outer = makeNode({ node_id: "outer", kind: "agent", agent_id: 3, children: [wrapper] });
+    const turn = makeNode({ node_id: "turn", kind: "turn", agent_id: 1, children: [outer] });
+    const index = buildWorkflowIndex(makeNode({ node_id: "session", kind: "session", agent_id: 1, children: [turn] }));
+    const scopePath = workflowAncestors(index, "outer");
+    const inspectedPath = workflowAncestors(index, "inner");
+    expect(inspectedPath.map((node) => node.node_id)).toContain("wrapper");
+    const choices = scopeChoices(index, scopePath, inspectedPath);
+    expect(choices.map(({ node }) => node.node_id)).toEqual(["session", "turn", "outer", "inner"]);
+    expect(choices.map(({ depth }) => depth)).toEqual([...choices.map(({ depth }) => depth)].sort((a, b) => a - b));
   });
 });

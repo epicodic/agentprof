@@ -8,14 +8,12 @@ from pathlib import Path
 
 from agentprof.adapters.base import AdapterConfig, SessionRef, SessionSummary, latest_mtime
 from agentprof.adapters.codex.discovery import SessionFiles, default_sessions_root, read_metadata, session_files
-from agentprof.adapters.codex.prompts import first_line
 from agentprof.adapters.codex.rollout import Rollout, load_rollout
 from agentprof.adapters.codex.tools import is_known_tool_id
 from agentprof.adapters.codex.tree import build_root, usage_cost
+from agentprof.adapters.common import title_from_prompts
 from agentprof.model import CostMetric, Diagnostics, Session, sum_costs
 from agentprof.pricing import PriceTable
-
-_TITLE_LENGTH = 80
 
 
 def _merge_main_rollouts(rollouts: list[Rollout]) -> Rollout:
@@ -27,6 +25,7 @@ def _merge_main_rollouts(rollouts: list[Rollout]) -> Rollout:
         main.turns.extend(continuation.turns)
         main.native_records.extend(continuation.native_records)
         main.malformed_lines += continuation.malformed_lines
+        main.malformed_line_details.extend(continuation.malformed_line_details)
         main.source_present = main.source_present or continuation.source_present
         if continuation.last_message_ms is not None:
             main.last_message_ms = max(
@@ -38,10 +37,7 @@ def _merge_main_rollouts(rollouts: list[Rollout]) -> Rollout:
 
 def _title(main: Rollout, fallback: str) -> str:
     """Return the first root-user prompt topic, or the stable native id."""
-    for turn in main.turns:
-        if turn.prompt:
-            return first_line(turn.prompt, _TITLE_LENGTH) or fallback
-    return fallback
+    return title_from_prompts((turn.prompt for turn in main.turns if turn.prompt), fallback)
 
 
 def _costs(rollouts: list[Rollout], prices: PriceTable) -> list[CostMetric]:
@@ -76,7 +72,7 @@ class CodexAdapter:
     def _files_for_id(self, session_id: str) -> SessionFiles | None:
         return next((files for files in session_files(self._root) if files.session_id == session_id), None)
 
-    def _load(self, ref: SessionRef) -> tuple[SessionFiles, Rollout, list[Rollout]]:
+    def _load(self, ref: SessionRef, *, retain_native: bool = True) -> tuple[SessionFiles, Rollout, list[Rollout]]:
         files = self._files_for_id(ref.native_id)
         if files is None:
             metadata = read_metadata(ref.path)
@@ -85,9 +81,13 @@ class CodexAdapter:
             files = SessionFiles(metadata.session_id, ref.path, [ref.path], [metadata])
         roots = [rollout.path for rollout in files.rollouts if rollout.parent_thread_id is None]
         main_paths = roots or [ref.path]
-        main = _merge_main_rollouts([load_rollout(path, self._root) for path in main_paths])
+        main = _merge_main_rollouts(
+            [load_rollout(path, self._root, retain_native=retain_native) for path in main_paths]
+        )
         subagents = [
-            load_rollout(rollout.path, self._root) for rollout in files.rollouts if rollout.path not in main_paths
+            load_rollout(rollout.path, self._root, retain_native=retain_native)
+            for rollout in files.rollouts
+            if rollout.path not in main_paths
         ]
         return files, main, subagents
 
@@ -105,7 +105,7 @@ class CodexAdapter:
         return SessionRef(agent=self.name, native_id=metadata.session_id, path=path, mtime=latest_mtime([path]))
 
     def summarize(self, ref: SessionRef) -> SessionSummary:
-        files, main, subagents = self._load(ref)
+        files, main, subagents = self._load(ref, retain_native=False)
         rollouts = [main, *subagents]
         start_ms = next((turn.start_ms for turn in main.turns if turn.start_ms is not None), None)
         return SessionSummary(
@@ -127,6 +127,9 @@ class CodexAdapter:
         _, main, subagents = self._load(ref)
         rollouts = [main, *subagents]
         diagnostics = Diagnostics(malformed_lines=sum(rollout.malformed_lines for rollout in rollouts))
+        diagnostics.malformed_line_details = [
+            detail for rollout in rollouts for detail in rollout.malformed_line_details
+        ]
         diagnostics.unknown_tool_ids = dict(
             Counter(
                 tool.name

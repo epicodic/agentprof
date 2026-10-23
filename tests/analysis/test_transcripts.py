@@ -6,11 +6,14 @@ import json
 
 import pytest
 
+from agentprof.analysis import transcripts
 from agentprof.analysis.identity import assign_call_keys
+from agentprof.analysis.session_index import SessionIndex
 from agentprof.analysis.transcripts import (
     TranscriptCursorError,
     decode_cursor,
     ordered_entries,
+    page_entries,
     scope_entries,
     search_entries,
     supporting_references,
@@ -110,11 +113,11 @@ def test_scope_excludes_nested_agents_and_tool_scope_uses_exact_invocation() -> 
     turn = Node(node_id="t", kind=NodeKind.TURN, topic="t", transcript_entries=[turn_entry], children=[agent])
     root = Node(node_id="s", kind=NodeKind.SESSION, topic="s", transcript_entries=[root_entry], children=[turn])
 
-    assert [entry.entry_id for entry in scope_entries(root)] == ["root", "turn", "parent", "child"]
-    assert [entry.entry_id for entry in scope_entries(root, "s")] == ["root", "turn"]
-    assert [entry.entry_id for entry in scope_entries(root, "a")] == ["parent"]
-    assert [entry.entry_id for entry in scope_entries(root, "t")] == ["turn"]
-    assert [entry.entry_id for entry in scope_entries(root, "tool-1")] == ["parent"]
+    assert [entry.entry_id for entry in scope_entries(SessionIndex(root))] == ["root", "turn", "parent", "child"]
+    assert [entry.entry_id for entry in scope_entries(SessionIndex(root), "s")] == ["root", "turn"]
+    assert [entry.entry_id for entry in scope_entries(SessionIndex(root), "a")] == ["parent"]
+    assert [entry.entry_id for entry in scope_entries(SessionIndex(root), "t")] == ["turn"]
+    assert [entry.entry_id for entry in scope_entries(SessionIndex(root), "tool-1")] == ["parent"]
 
 
 def test_stream_order_survives_regressing_times_and_merge_uses_stream_heads() -> None:
@@ -191,8 +194,8 @@ def test_large_nested_transcript_filters_resolve_exact_call_and_event_once() -> 
         parent = child
 
     assign_call_keys(root)
-    call_matches = scope_entries(root, "root", call_key="id:call-319")
-    event_matches = scope_entries(root, "root", event_id="event-319")
+    call_matches = scope_entries(SessionIndex(root), "root", call_key="id:call-319")
+    event_matches = scope_entries(SessionIndex(root), "root", event_id="event-319")
 
     assert [entry.entry_id for entry in call_matches] == ["entry-319"]
     assert [entry.entry_id for entry in event_matches] == ["entry-319"]
@@ -227,7 +230,7 @@ def test_duplicate_native_call_ids_never_fall_back_to_timestamp() -> None:
         ],
     )
 
-    assert supporting_references(owner, entry) == []
+    assert supporting_references(SessionIndex(owner), entry) == []
 
 
 def test_event_reference_requires_matching_logical_or_physical_source_stream() -> None:
@@ -241,7 +244,7 @@ def test_event_reference_requires_matching_logical_or_physical_source_stream() -
         execution_events=[ExecutionEvent(kind="message", event_id="event", source_stream_id="other")],
     )
 
-    assert supporting_references(owner, entry) == []
+    assert supporting_references(SessionIndex(owner), entry) == []
 
 
 def test_event_reference_accepts_either_recorded_physical_or_logical_stream_identity() -> None:
@@ -255,7 +258,7 @@ def test_event_reference_accepts_either_recorded_physical_or_logical_stream_iden
         execution_events=[ExecutionEvent(kind="message", event_id="event", source_stream_id="physical")],
     )
 
-    assert [(reference.kind, reference.key) for reference in supporting_references(owner, entry)] == [
+    assert [(reference.kind, reference.key) for reference in supporting_references(SessionIndex(owner), entry)] == [
         ("event", "event")
     ]
 
@@ -289,7 +292,7 @@ def test_duplicate_owner_or_subject_node_ids_do_not_resolve_arbitrarily() -> Non
 
     assign_call_keys(root)
 
-    assert supporting_references(root, entry) == []
+    assert supporting_references(SessionIndex(root), entry) == []
 
     unique_owner = Node(
         node_id="owner",
@@ -304,9 +307,9 @@ def test_duplicate_owner_or_subject_node_ids_do_not_resolve_arbitrarily() -> Non
         node_id="unique-root", kind=NodeKind.SESSION, topic="root", children=[unique_owner, subject_a, subject_b]
     )
     assign_call_keys(unique_owner_root)
-    assert [(reference.kind, reference.key) for reference in supporting_references(unique_owner_root, entry)] == [
-        ("call", "id:call")
-    ]
+    assert [
+        (reference.kind, reference.key) for reference in supporting_references(SessionIndex(unique_owner_root), entry)
+    ] == [("call", "id:call")]
 
 
 def test_scope_rejects_ambiguous_node_id() -> None:
@@ -321,7 +324,7 @@ def test_scope_rejects_ambiguous_node_id() -> None:
     )
 
     with pytest.raises(KeyError, match="duplicate"):
-        scope_entries(root, "duplicate")
+        scope_entries(SessionIndex(root), "duplicate")
 
 
 def test_decode_cursor_rejects_non_string_or_empty_direction_and_entry_id() -> None:
@@ -377,7 +380,7 @@ def test_call_reference_uses_existing_stable_key_and_exact_logical_stream() -> N
     assign_call_keys(owner)
     (reference,) = __import__(
         "agentprof.analysis.transcripts", fromlist=["supporting_references"]
-    ).supporting_references(owner, entry)
+    ).supporting_references(SessionIndex(owner), entry)
 
     assert (reference.kind, reference.owner_id, reference.key) == ("call", "owner", "id:call-id")
 
@@ -393,7 +396,7 @@ def test_tool_scope_uses_call_identity_not_tool_name() -> None:
     owner = Node(node_id="owner", kind=NodeKind.AGENT, topic="owner", transcript_entries=[entry], children=[tool])
     root = Node(node_id="root", kind=NodeKind.SESSION, topic="root", children=[owner])
 
-    assert [item.entry_id for item in scope_entries(root, "invocation-id")] == ["e1"]
+    assert [item.entry_id for item in scope_entries(SessionIndex(root), "invocation-id")] == ["e1"]
 
 
 def test_search_rejects_whitespace_query() -> None:
@@ -422,5 +425,45 @@ def test_owner_scope_does_not_search_nested_agent() -> None:
         )
     ]
 
-    assert [hit.entry.entry_id for hit in search_entries(scope_entries(root, "a"), "phrase")] == []
-    assert [hit.entry.entry_id for hit in search_entries(scope_entries(root), "phrase")] == ["nested"]
+    assert [hit.entry.entry_id for hit in search_entries(scope_entries(SessionIndex(root), "a"), "phrase")] == []
+    assert [hit.entry.entry_id for hit in search_entries(scope_entries(SessionIndex(root)), "phrase")] == ["nested"]
+
+
+def _scoped_tree() -> Node:
+    turn_entries = [
+        _entry("t1", "t", "turn", 1, Metric.exact(2), "phrase one"),
+        _entry("t2", "t", "turn", 2, Metric.exact(3), "phrase two"),
+    ]
+    agent_entry = _entry("a1", "a", "agent", 1, Metric.exact(4), "phrase three")
+    agent = Node(node_id="a", kind=NodeKind.AGENT, topic="a", transcript_entries=[agent_entry])
+    turn = Node(node_id="t", kind=NodeKind.TURN, topic="t", transcript_entries=turn_entries, children=[agent])
+    return Node(node_id="s", kind=NodeKind.SESSION, topic="s", children=[turn])
+
+
+def test_scope_entries_are_memoised_per_scope_on_the_index(monkeypatch: pytest.MonkeyPatch) -> None:
+    index = SessionIndex(_scoped_tree())
+    orderings: list[int] = []
+    original = transcripts.ordered_entries
+
+    def counting(entries: list[TranscriptEntry]) -> list[TranscriptEntry]:
+        orderings.append(len(entries))
+        return original(entries)
+
+    monkeypatch.setattr(transcripts, "ordered_entries", counting)
+
+    first = transcripts.scope_entries(index, "a")
+    second = transcripts.scope_entries(index, "a")
+    transcripts.scope_entries(index)
+
+    assert second is first
+    assert len(orderings) == 2
+
+
+def test_search_and_page_keep_the_order_they_are_given(monkeypatch: pytest.MonkeyPatch) -> None:
+    entries = transcripts.scope_entries(SessionIndex(_scoped_tree()))
+    monkeypatch.setattr(transcripts, "ordered_entries", lambda _: pytest.fail("ordered again"))
+
+    assert len(search_entries(entries, "phrase")) == 3
+    page = page_entries(entries, limit=2, session_id="x", scope_id=None)
+
+    assert page.entries == entries[:2]

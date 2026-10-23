@@ -3,44 +3,44 @@
 """API response models and their mapping from the neutral model and registry rows."""
 
 from collections.abc import Mapping
-from typing import Any, Literal
+from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from agentprof.analysis.activity import NodeActivity, node_activity
-from agentprof.analysis.agent_summary import AgentGroup, agent_groups, agent_ids
+from agentprof.analysis.agent_summary import agent_groups, agent_ids
 from agentprof.model import (
-    CallEvent,
-    CostMetric,
-    Diagnostics,
-    EventCallLink,
-    ExecutionEvent,
-    Finding,
-    FindingReference,
-    LlmCall,
-    Metric,
+    CallLinkEvidence,
+    CallLinkRelation,
+    ExecutionEventKind,
+    FindingReferenceKind,
     Node,
     NodeKind,
     Session,
-    Tokens,
-    ToolInfo,
+    TimingBasis,
 )
 from agentprof.registry import RowState, SessionRow
 
 
-class MetricOut(BaseModel):
+class _FromModel(BaseModel):
+    """A response model whose fields equal the neutral model's attributes; Pydantic reads them from the object."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class MetricOut(_FromModel):
     value: float | None
     provenance: str
 
 
-class CostOut(BaseModel):
+class CostOut(_FromModel):
     value: float | None
     unit: str | None
     usd: float | None
     provenance: str
 
 
-class TokensOut(BaseModel):
+class TokensOut(_FromModel):
     input: MetricOut
     output: MetricOut
     cache_read: MetricOut
@@ -49,7 +49,7 @@ class TokensOut(BaseModel):
     cache_write_1h: MetricOut
 
 
-class ToolOut(BaseModel):
+class ToolOut(_FromModel):
     native_id: str
     category: str
     path: str | None
@@ -62,7 +62,7 @@ class ToolOut(BaseModel):
     linked_agent_node_id: str | None
 
 
-class LlmCallOut(BaseModel):
+class LlmCallOut(_FromModel):
     call_id: str | None
     start: MetricOut
     duration: MetricOut
@@ -80,11 +80,11 @@ class LlmCallOut(BaseModel):
     source_request_id: str | None = None
     source_order: int | None = None
     source_stream_id: str | None = None
-    timing_basis: Literal["request_start", "assistant_message", "usage_report", "turn_start", "unknown"] = "unknown"
+    timing_basis: TimingBasis = "unknown"
     call_key: str | None = None
 
 
-class CallEventOut(BaseModel):
+class CallEventOut(_FromModel):
     kind: str
     event_id: str
     start: MetricOut
@@ -92,25 +92,15 @@ class CallEventOut(BaseModel):
     duration: MetricOut
 
 
-class EventCallLinkOut(BaseModel):
+class EventCallLinkOut(_FromModel):
     source_request_id: str
-    relation: Literal["requested_by", "consumed_by", "next_observed_call"]
-    evidence: Literal["recorded", "observed_order"]
+    relation: CallLinkRelation
+    evidence: CallLinkEvidence
     owner_id: str | None = None
 
 
-class ExecutionEventOut(BaseModel):
-    kind: Literal[
-        "user_input",
-        "tool_start",
-        "tool_result",
-        "delegation",
-        "child_completion",
-        "completion",
-        "message",
-        "resume",
-        "compaction",
-    ]
+class ExecutionEventOut(_FromModel):
+    kind: ExecutionEventKind
     event_id: str | None = None
     subject_node_id: str | None = None
     start: MetricOut
@@ -122,14 +112,14 @@ class ExecutionEventOut(BaseModel):
     execution_end: MetricOut
 
 
-class FindingReferenceOut(BaseModel):
-    kind: Literal["node", "call", "event"]
+class FindingReferenceOut(_FromModel):
+    kind: FindingReferenceKind
     owner_id: str
     key: str
     label: str
 
 
-class FindingOut(BaseModel):
+class FindingOut(_FromModel):
     heuristic_id: str
     node_id: str
     severity: str
@@ -173,13 +163,13 @@ class NodeOut(BaseModel):
     children: list["NodeOut"]
 
 
-class DiagnosticsOut(BaseModel):
+class DiagnosticsOut(_FromModel):
     malformed_lines: int
     unknown_tool_ids: dict[str, int]
     warnings: list[str]
 
 
-class MalformedLineDetailOut(BaseModel):
+class MalformedLineDetailOut(_FromModel):
     source_path: str
     line_number: int
     excerpt: str
@@ -190,7 +180,7 @@ class DiagnosticsDetailOut(DiagnosticsOut):
     malformed_line_details: list[MalformedLineDetailOut]
 
 
-class AgentSummaryRowOut(BaseModel):
+class AgentSummaryRowOut(_FromModel):
     agent_id: int
     harness_agent_id: str | None
     parent_agent_id: int | None
@@ -286,123 +276,6 @@ class AgentSummaryOut(BaseModel):
     agents: list[AgentSummaryRowOut]
 
 
-def metric_out(metric: Metric) -> MetricOut:
-    return MetricOut(value=metric.value, provenance=metric.provenance.value)
-
-
-def cost_out(cost: CostMetric) -> CostOut:
-    return CostOut(value=cost.value, unit=cost.unit, usd=cost.usd, provenance=cost.provenance.value)
-
-
-def tokens_out(tokens: Tokens) -> TokensOut:
-    return TokensOut(
-        input=metric_out(tokens.input),
-        output=metric_out(tokens.output),
-        cache_read=metric_out(tokens.cache_read),
-        cache_write=metric_out(tokens.cache_write),
-        cache_write_5m=metric_out(tokens.cache_write_5m),
-        cache_write_1h=metric_out(tokens.cache_write_1h),
-    )
-
-
-def _tool_out(tool: ToolInfo) -> ToolOut:
-    return ToolOut(
-        native_id=tool.native_id,
-        category=tool.category.value,
-        path=tool.path,
-        paths=list(tool.paths),
-        line_range=tool.line_range,
-        command=tool.command,
-        writes_file=tool.writes_file,
-        target_agent_id=tool.target_agent_id,
-        is_resume=tool.is_resume,
-        linked_agent_node_id=tool.linked_agent_node_id,
-    )
-
-
-def _llm_call_out(call: LlmCall) -> LlmCallOut:
-    return LlmCallOut(
-        call_id=call.call_id,
-        start=metric_out(call.start),
-        duration=metric_out(call.duration),
-        model=call.model,
-        tokens=tokens_out(call.tokens),
-        cost=cost_out(call.cost),
-        in_context=call.in_context,
-        cost_parts={kind: cost_out(part) for kind, part in call.cost_parts.items()},
-        price_prefix=call.price_prefix,
-        gap=metric_out(call.gap),
-        gap_basis=call.gap_basis,
-        preceding_events=[_call_event_out(event) for event in call.preceding_events],
-        cold_reason=call.cold_reason,
-        cold_rewrite=call.cold_rewrite,
-        source_request_id=call.source_request_id,
-        source_order=call.source_order,
-        source_stream_id=call.source_stream_id,
-        timing_basis=call.timing_basis,
-        call_key=call.call_key,
-    )
-
-
-def _event_call_link_out(link: EventCallLink) -> EventCallLinkOut:
-    return EventCallLinkOut(
-        source_request_id=link.source_request_id,
-        relation=link.relation,
-        evidence=link.evidence,
-        owner_id=link.owner_id,
-    )
-
-
-def _execution_event_out(event: ExecutionEvent) -> ExecutionEventOut:
-    return ExecutionEventOut(
-        kind=event.kind,
-        event_id=event.event_id,
-        subject_node_id=event.subject_node_id,
-        start=metric_out(event.start),
-        source_order=event.source_order,
-        source_stream_id=event.source_stream_id,
-        success=event.success,
-        links=[_event_call_link_out(link) for link in event.links],
-        execution_start=metric_out(event.execution_start),
-        execution_end=metric_out(event.execution_end),
-    )
-
-
-def _call_event_out(event: CallEvent) -> CallEventOut:
-    return CallEventOut(
-        kind=event.kind,
-        event_id=event.event_id,
-        start=metric_out(event.start),
-        end=metric_out(event.end),
-        duration=metric_out(event.duration),
-    )
-
-
-def finding_out(finding: Finding) -> FindingOut:
-    return FindingOut(
-        heuristic_id=finding.heuristic_id,
-        node_id=finding.node_id,
-        severity=finding.severity,
-        message=finding.message,
-        evidence=finding.evidence,
-        estimated_avoidable_cost=cost_out(finding.estimated_avoidable_cost),
-        references=[finding_reference_out(reference) for reference in finding.references],
-        observed_cost=cost_out(finding.observed_cost),
-        avoidable_cost_baseline=finding.avoidable_cost_baseline,
-        rank=finding.rank,
-    )
-
-
-def finding_reference_out(reference: FindingReference) -> FindingReferenceOut:
-    """Map one neutral finding reference to its API representation."""
-    return FindingReferenceOut(
-        kind=reference.kind,
-        owner_id=reference.owner_id,
-        key=reference.key,
-        label=reference.label,
-    )
-
-
 def node_out(
     node: Node,
     agent_ids: dict[str, int] | None = None,
@@ -448,55 +321,29 @@ def node_out(
         topic=node.topic,
         model=node.model,
         success=node.success,
-        tool=_tool_out(node.tool) if node.tool is not None else None,
-        start=metric_out(node.start),
-        end=metric_out(node.end),
-        duration=metric_out(node.duration),
-        user_wait=metric_out(node.user_wait),
-        llm_call_count=metric_out(node.llm_call_count),
-        tool_call_count=metric_out(node.tool_call_count),
-        tokens=tokens_out(node.tokens),
-        tokens_total=tokens_out(node.tokens_total),
-        cost_total=cost_out(node.cost_total),
-        cost_own=cost_out(node.cost_own),
-        context_peak=metric_out(node.context_peak),
-        compactions=[metric_out(compaction) for compaction in node.compactions],
-        resume_times=[metric_out(point) for point in node.resume_times],
-        llm_calls=[_llm_call_out(call) for call in node.llm_calls],
-        execution_events=[_execution_event_out(event) for event in node.execution_events],
-        findings=[finding_out(finding) for finding in node.findings],
+        tool=node.tool,
+        start=node.start,
+        end=node.end,
+        duration=node.duration,
+        user_wait=node.user_wait,
+        llm_call_count=node.llm_call_count,
+        tool_call_count=node.tool_call_count,
+        tokens=node.tokens,
+        tokens_total=node.tokens_total,
+        cost_total=node.cost_total,
+        cost_own=node.cost_own,
+        context_peak=node.context_peak,
+        compactions=node.compactions,
+        resume_times=node.resume_times,
+        llm_calls=node.llm_calls,
+        execution_events=node.execution_events,
+        findings=node.findings,
         children=children,
     )
 
 
-def diagnostics_out(diagnostics: Diagnostics) -> DiagnosticsOut:
-    return DiagnosticsOut(
-        malformed_lines=diagnostics.malformed_lines,
-        unknown_tool_ids=diagnostics.unknown_tool_ids,
-        warnings=diagnostics.warnings,
-    )
-
-
-def diagnostics_detail_out(diagnostics: Diagnostics) -> DiagnosticsDetailOut:
-    """Map diagnostic counts and bounded source-line details for the dedicated endpoint."""
-    return DiagnosticsDetailOut(
-        malformed_lines=diagnostics.malformed_lines,
-        unknown_tool_ids=diagnostics.unknown_tool_ids,
-        warnings=diagnostics.warnings,
-        malformed_line_details=[
-            MalformedLineDetailOut(
-                source_path=detail.source_path,
-                line_number=detail.line_number,
-                excerpt=detail.excerpt,
-                error_category=detail.error_category,
-            )
-            for detail in diagnostics.malformed_line_details
-        ],
-    )
-
-
 def _agent_rows(session: Session) -> list[AgentSummaryRowOut]:
-    return [agent_summary_row_out(group) for group in agent_groups(session.root)]
+    return [AgentSummaryRowOut.model_validate(group) for group in agent_groups(session.root)]
 
 
 def session_out(session: Session, mtime: float) -> SessionOut:
@@ -507,35 +354,9 @@ def session_out(session: Session, mtime: float) -> SessionOut:
         workspace=session.workspace,
         mtime=mtime,
         sources=session.sources,
-        diagnostics=diagnostics_out(session.diagnostics),
+        diagnostics=session.diagnostics,
         agents=_agent_rows(session),
         root=node_out(session.root, agent_ids(session.root)),
-    )
-
-
-def agent_summary_row_out(group: AgentGroup) -> AgentSummaryRowOut:
-    return AgentSummaryRowOut(
-        agent_id=group.agent_id,
-        harness_agent_id=group.harness_agent_id,
-        parent_agent_id=group.parent_agent_id,
-        topic=group.topic,
-        models=group.models,
-        llm_calls=metric_out(group.llm_calls),
-        duration=metric_out(group.duration),
-        tokens_in_out=metric_out(group.tokens_in_out),
-        context_peak=metric_out(group.context_peak),
-        tokens=tokens_out(group.tokens),
-        own_cost=cost_out(group.own_cost),
-        subtree_cost=cost_out(group.subtree_cost),
-        start=metric_out(group.start),
-        end=metric_out(group.end),
-        cost_parts={kind: cost_out(part) for kind, part in group.cost_parts.items()},
-        cache_ttl=group.cache_ttl,
-        cold_rewrites=metric_out(group.cold_rewrites),
-        cold_rewrite_cost=cost_out(group.cold_rewrite_cost),
-        longest_gap=metric_out(group.longest_gap),
-        findings_count=group.findings_count,
-        resume_count=group.resume_count,
     )
 
 
@@ -572,7 +393,7 @@ def summary_out(row: SessionRow) -> SummaryOut:
         last_activity_ms=summary.last_activity_ms if summary is not None else None,
         end_ms=summary.end_ms if summary is not None else None,
         file_size=summary.file_size if summary is not None else None,
-        cost_total=cost_out(summary.cost_total) if summary is not None else None,
+        cost_total=summary.cost_total if summary is not None else None,
         error=row.error if state is RowState.ERROR else None,
     )
 
@@ -604,7 +425,7 @@ def projected_session_out(session: Session, mtime: float, depth: int | None, fie
             sources=session.sources,
         )
     if "diagnostics" in selected:
-        projected["diagnostics"] = diagnostics_out(session.diagnostics).model_dump(mode="json")
+        projected["diagnostics"] = DiagnosticsOut.model_validate(session.diagnostics).model_dump(mode="json")
     if "tree" in selected:
         root = node_out(
             session.root,

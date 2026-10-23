@@ -67,13 +67,19 @@ def read_meta(agent_id: str, meta_file: Path) -> SubagentMeta:
     )
 
 
-def load_subagents(session_file: Path) -> list[Subagent]:
-    """Parse every subagent transcript of a session, flat regardless of nesting depth."""
+def load_subagents(session_file: Path, *, retain_native: bool = True) -> list[Subagent]:
+    """Parse every subagent transcript of a session, flat regardless of nesting depth.
+
+    `retain_native=False` skips `native_records`, the transcript entries only `analyze` needs.
+    """
     directory = subagent_dir(session_file)
     subagents: list[Subagent] = []
     for path in sorted(directory.glob(f"{_AGENT_PREFIX}*.jsonl")):
         agent_id = path.stem.removeprefix(_AGENT_PREFIX)
         subagents.append(
-            Subagent(meta=read_meta(agent_id, path.with_suffix(".meta.json")), transcript=load_transcript(path))
+            Subagent(
+                meta=read_meta(agent_id, path.with_suffix(".meta.json")),
+                transcript=load_transcript(path, retain_native=retain_native),
+            )
         )
     return subagents

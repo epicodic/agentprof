@@ -4,13 +4,18 @@
 from pathlib import Path
 
 from agentprof.adapters.base import SessionRef, SessionSummary
+from agentprof.analysis.agent_summary import agent_groups
 from agentprof.analysis.rollup import roll_up
 from agentprof.model import (
+    CallEvent,
     CostMetric,
+    Diagnostics,
     EventCallLink,
     ExecutionEvent,
     Finding,
+    FindingReference,
     LlmCall,
+    MalformedLineDetail,
     Metric,
     Node,
     NodeKind,
@@ -22,9 +27,13 @@ from agentprof.model import (
 )
 from agentprof.registry import SessionRow
 from agentprof.server.schemas import (
+    AgentSummaryRowOut,
+    CostOut,
+    DiagnosticsDetailOut,
+    FindingOut,
     LlmCallOut,
+    ToolOut,
     agent_summary_out,
-    cost_out,
     node_detail_out,
     node_out,
     session_out,
@@ -545,13 +554,84 @@ def test_session_out_carries_context_fields() -> None:
     assert out["compactions"] == [{"value": 7, "provenance": "exact"}]
 
 
-def test_cost_out_adds_the_usd_value_of_credits() -> None:
+def test_cost_response_adds_the_usd_value_of_credits() -> None:
     cost = CostMetric(value=42.0, unit="credits", provenance=Provenance.EXACT, usd_per_unit=0.01)
 
-    assert cost_out(cost).model_dump() == {"value": 42.0, "unit": "credits", "usd": 0.42, "provenance": "exact"}
+    assert CostOut.model_validate(cost).model_dump() == {
+        "value": 42.0,
+        "unit": "credits",
+        "usd": 0.42,
+        "provenance": "exact",
+    }
 
 
-def test_finding_out_includes_reference_and_observed_cost_defaults() -> None:
+def test_mirror_models_validate_from_the_model_objects() -> None:
+    tool = ToolInfo(
+        native_id="t1",
+        category=ToolCategory.READ,
+        path="a.py",
+        paths=("a.py", "b.py"),
+        line_range=(1, 5),
+        arguments={"file_path": "a.py"},
+    )
+    call = LlmCall(
+        start=Metric.exact(1),
+        call_id="c1",
+        cost_parts={"input": CostMetric(value=1.0, unit="USD", provenance=Provenance.EXACT)},
+        preceding_events=[CallEvent(kind="tool", event_id="e1", start=Metric.exact(0))],
+        timing_basis="request_start",
+    )
+
+    assert ToolOut.model_validate(tool).model_dump(mode="json") == {
+        "native_id": "t1",
+        "category": "read",
+        "path": "a.py",
+        "paths": ["a.py", "b.py"],
+        "line_range": [1, 5],
+        "command": None,
+        "writes_file": False,
+        "target_agent_id": None,
+        "is_resume": False,
+        "linked_agent_node_id": None,
+    }
+    out = LlmCallOut.model_validate(call).model_dump(mode="json")
+    assert out["start"] == {"value": 1.0, "provenance": "exact"}
+    assert out["cost_parts"] == {"input": {"value": 1.0, "unit": "USD", "usd": 1.0, "provenance": "exact"}}
+    assert out["preceding_events"][0]["event_id"] == "e1"
+    assert out["timing_basis"] == "request_start"
+
+
+def test_findings_diagnostics_and_agent_rows_validate_from_the_model_objects() -> None:
+    reference = FindingReference(kind="call", owner_id="t1", key="id:a", label="LLM call 1")
+    finding = Finding(heuristic_id="E1", node_id="t1", severity="high", message="m", references=[reference])
+    diagnostics = Diagnostics(
+        malformed_lines=1,
+        malformed_line_details=[
+            MalformedLineDetail(source_path="s.jsonl", line_number=3, excerpt="{", error_category="json")
+        ],
+        unknown_tool_ids={"x": 2},
+        warnings=["w"],
+    )
+    turn = Node(node_id="t1", kind=NodeKind.TURN, topic="t", findings=[finding])
+    root = Node(node_id="root", kind=NodeKind.SESSION, topic="s", children=[turn])
+    roll_up(root)
+
+    assert FindingOut.model_validate(finding).model_dump(mode="json")["references"] == [
+        {"kind": "call", "owner_id": "t1", "key": "id:a", "label": "LLM call 1"}
+    ]
+    assert DiagnosticsDetailOut.model_validate(diagnostics).model_dump(mode="json") == {
+        "malformed_lines": 1,
+        "unknown_tool_ids": {"x": 2},
+        "warnings": ["w"],
+        "malformed_line_details": [
+            {"source_path": "s.jsonl", "line_number": 3, "excerpt": "{", "error_category": "json"}
+        ],
+    }
+    [group] = agent_groups(root)
+    assert AgentSummaryRowOut.model_validate(group).agent_id == group.agent_id
+
+
+def test_finding_response_includes_reference_and_observed_cost_defaults() -> None:
     finding = Finding(heuristic_id="W6", node_id="t1", severity="low", message="idle")
     turn = Node(node_id="t1", kind=NodeKind.TURN, topic="t", findings=[finding])
     root = Node(node_id="root", kind=NodeKind.SESSION, topic="s", children=[turn])

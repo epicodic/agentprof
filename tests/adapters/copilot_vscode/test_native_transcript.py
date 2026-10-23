@@ -11,6 +11,7 @@ from agentprof.adapters.copilot_vscode.debuglog import load_debug_log_dir
 from agentprof.adapters.copilot_vscode.session import parse_session_data
 from agentprof.adapters.copilot_vscode.transcript import load_transcript
 from agentprof.adapters.copilot_vscode.tree import build_root
+from agentprof.analysis.session_index import SessionIndex
 from agentprof.model import Provenance, iter_nodes, transcript_entry_id
 from agentprof.server.transcript_schema import transcript_detail_out
 
@@ -175,7 +176,7 @@ def test_null_tool_completion_body_is_unavailable_in_transcript_detail(tmp_path:
         for entry in node.transcript_entries
         if entry.kind == "tool_result" and entry.invocation_id == "call"
     )
-    detail = transcript_detail_out(root, completion)
+    detail = transcript_detail_out(SessionIndex(root), completion)
 
     assert detail.coverage.source_present is True
     assert detail.coverage.categories == ["transcript", "export"]
@@ -205,7 +206,7 @@ def test_structured_tool_completion_body_remains_recorded_in_transcript_detail(
         for entry in node.transcript_entries
         if entry.kind == "tool_result" and entry.invocation_id == "call"
     )
-    detail = transcript_detail_out(root, completion)
+    detail = transcript_detail_out(SessionIndex(root), completion)
 
     assert detail.block_availability == ["recorded"]
     assert detail.blocks[0].native_type == body_key

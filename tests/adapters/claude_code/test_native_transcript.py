@@ -7,6 +7,7 @@ from pathlib import Path
 from agentprof.adapters.claude_code.discovery import Subagent, SubagentMeta
 from agentprof.adapters.claude_code.transcript import load_transcript
 from agentprof.adapters.claude_code.tree import build_root
+from agentprof.analysis.session_index import SessionIndex
 from agentprof.analysis.transcripts import scope_coverage, scope_entries
 from agentprof.model import Node, NodeKind, TranscriptEntry, iter_nodes
 from agentprof.pricing import PriceTable
@@ -106,7 +107,7 @@ def test_retains_ordered_assistant_content_and_tool_result_mixed_with_user_text(
     prompt_entry = next(entry for entry in entries if entry.native_id == "u1")
     assert prompt_entry.event_id == "user-input:u1"
     assert prompt_entry.subject_node_id == root.children[0].node_id
-    assert scope_entries(root, root.children[0].node_id, event_id="user-input:u1") == [prompt_entry]
+    assert scope_entries(SessionIndex(root), root.children[0].node_id, event_id="user-input:u1") == [prompt_entry]
     mixed_text_entry = next(entry for entry in entries if entry.blocks[0].text == "ordinary user text")
     assert (mixed_text_entry.event_id, mixed_text_entry.subject_node_id) == (None, None)
     result = next(entry for entry in entries if entry.kind == "tool_result")
@@ -125,7 +126,7 @@ def test_retains_ordered_assistant_content_and_tool_result_mixed_with_user_text(
         "tool_use_id": "tool-structured",
         "content": {"payload": [1, 2]},
     }
-    tool_scope = scope_entries(root, "tool-1")
+    tool_scope = scope_entries(SessionIndex(root), "tool-1")
     assert all(entry.invocation_id == "tool-1" for entry in tool_scope)
     assert all("ordinary user text" not in (entry.blocks[0].text or "") for entry in tool_scope)
 
@@ -246,7 +247,7 @@ def test_distinguishes_missing_content_and_retains_meta_compaction_unknown_and_e
     compact = next(entry for entry in entries if entry.kind == "compaction")
     assert compact.timestamp.value is not None
     assert load_transcript(path).malformed_lines == 1
-    coverage = scope_coverage(root, root.children[0].node_id)
+    coverage = scope_coverage(SessionIndex(root), root.children[0].node_id)
     assert "unavailable_content" in coverage.reasons
     assert root.children[0].kind is NodeKind.TURN
 

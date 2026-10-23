@@ -67,6 +67,7 @@ def test_analyze_reports_sources_and_diagnostics(tmp_path: Path) -> None:
     assert session.workspace == "/work/demo"
     assert session.sources == ["rollout", "subagents"]
     assert session.diagnostics.malformed_lines == 1
+    assert len(session.diagnostics.malformed_line_details) == 1
     assert session.diagnostics.unknown_tool_ids == {"new_tool": 1}
 
 

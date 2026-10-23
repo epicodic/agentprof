@@ -1358,6 +1358,7 @@ test("following latest advances to content appended after the current anchor", a
   await expect(scope).toHaveValue("whole");
   await expect(page.getByRole("searchbox", { name: "Search recorded content" })).toHaveValue("keep this draft");
 
+  await expect.poll(() => anchors.includes("latest-1")).toBe(true);
   appended = true;
   await emitSessionUpdate(page);
   await expect(page.getByTestId("transcript-entry-latest-2")).toBeVisible();

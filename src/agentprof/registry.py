@@ -13,11 +13,15 @@ from pathlib import Path
 
 from agentprof.adapters.base import AgentAdapter, SessionRef, SessionSummary
 from agentprof.analysis.pipeline import analyze
+from agentprof.analysis.session_index import SessionIndex
 from agentprof.model import Session
 
 _LOG = logging.getLogger(__name__)
 _DEFAULT_CACHE_SIZE = 20
+_DEFAULT_CACHE_BYTES = 256 * 1024**2
 _DEFAULT_INTERVAL_S = 3.0
+LIVE_REANALYSIS_INTERVAL_S = 10.0
+"""How long the app serves a changing session's previous analysis before analysing it again."""
 
 
 class RowState(StrEnum):
@@ -60,12 +64,40 @@ class SessionRow:
         return RowState.SUMMARIZED
 
 
+@dataclass(frozen=True)
+class AnalysedSession:
+    """An analysed session, the file version it describes, and its lookup index."""
+
+    session: Session
+    mtime: float
+    index: SessionIndex
+
+
+@dataclass(frozen=True)
+class _CacheEntry:
+    analysed: AnalysedSession
+    source_bytes: int
+    analysed_at: float
+
+
 class SessionUnavailable(Exception):
     """A known session whose files could not be analysed."""
 
 
 def _mtime(ref: SessionRef) -> float:
     return ref.mtime
+
+
+def _source_bytes(row: SessionRow | None) -> int:
+    """The session's size on disk: its summary's `file_size`, else the size of its main file, else 0."""
+    if row is None:
+        return 0
+    if row.summary is not None:
+        return row.summary.file_size
+    try:
+        return row.ref.path.stat().st_size
+    except OSError:
+        return 0
 
 
 def _describe(error: Exception) -> str:
@@ -75,11 +107,22 @@ def _describe(error: Exception) -> str:
 class Registry:
     """Thread-safe store of session rows; `step` summarises one row in the background."""
 
-    def __init__(self, adapters: list[AgentAdapter], cache_size: int = _DEFAULT_CACHE_SIZE) -> None:
+    def __init__(
+        self,
+        adapters: list[AgentAdapter],
+        cache_size: int = _DEFAULT_CACHE_SIZE,
+        cache_bytes: int = _DEFAULT_CACHE_BYTES,
+        reanalysis_interval_s: float = 0.0,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
         self._adapters = {adapter.name: adapter for adapter in adapters}
         self._cache_size = cache_size
+        self._cache_bytes = cache_bytes
+        self._reanalysis_interval_s = reanalysis_interval_s
+        self._clock = clock
+        self._held: set[str] = set()
         self._rows: dict[str, SessionRow] = {}
-        self._cache: OrderedDict[str, tuple[float, Session]] = OrderedDict()
+        self._cache: OrderedDict[str, _CacheEntry] = OrderedDict()
         self._failures: dict[str, tuple[float, str]] = {}
         self._in_flight: dict[tuple[str, float], threading.Event] = {}
         self._subscribers: list[Callable[[RegistryEvent], None]] = []
@@ -170,6 +213,7 @@ class Registry:
         del self._rows[session_id]
         self._cache.pop(session_id, None)
         self._failures.pop(session_id, None)
+        self._held.discard(session_id)
 
     def _next_pending(self) -> SessionRef | None:
         """The most recently changed row without a current summary."""
@@ -200,7 +244,16 @@ class Registry:
         self._emit([RegistryEvent(kind=EventKind.UPDATED, session_id=ref.id)])
 
     def session(self, session_id: str) -> tuple[Session, float]:
-        """The analysed session and the file version it describes; analyses now unless cached.
+        """The analysed session and the file version it describes; see `analysed`."""
+        analysed = self.analysed(session_id)
+        return analysed.session, analysed.mtime
+
+    def analysed(self, session_id: str) -> AnalysedSession:
+        """The analysed session, its file version and index; analyses now unless cached.
+
+        With a re-analysis interval, a session that changed within the interval of its last analysis gets that
+        analysis; `release_held` announces it again later.
+        The cache holds at most `cache_size` analyses and, beyond the newest, at most `cache_bytes` of source files.
 
         Raises:
             KeyError: `session_id` is not a known session.
@@ -212,9 +265,13 @@ class Registry:
                 raise KeyError(session_id)
             ref = row.ref
             cached = self._cache.get(session_id)
-            if cached is not None and cached[0] == ref.mtime:
+            if cached is not None and (
+                cached.analysed.mtime == ref.mtime or self._clock() - cached.analysed_at < self._reanalysis_interval_s
+            ):
+                if cached.analysed.mtime != ref.mtime:
+                    self._held.add(session_id)
                 self._cache.move_to_end(session_id)
-                return cached[1], ref.mtime
+                return cached.analysed
             failure = self._failures.get(session_id)
             if failure is not None and failure[0] == ref.mtime:
                 raise SessionUnavailable(failure[1])
@@ -224,9 +281,10 @@ class Registry:
                 self._in_flight[key] = threading.Event()
         if running is not None:  # another request analyses this file version already: share its result
             running.wait()
-            return self.session(session_id)
+            return self.analysed(session_id)
         try:
             session = analyze(self._adapters[ref.agent], ref)
+            analysed = AnalysedSession(session, ref.mtime, SessionIndex(session.root))
         except Exception as error:  # noqa: BLE001 - reported to the caller as unavailable
             message = _describe(error)
             with self._lock:
@@ -236,14 +294,40 @@ class Registry:
         else:
             with self._lock:
                 self._failures.pop(session_id, None)
-                self._cache[session_id] = (ref.mtime, session)
+                self._held.discard(session_id)
+                self._cache[session_id] = _CacheEntry(
+                    analysed, _source_bytes(self._rows.get(session_id)), self._clock()
+                )
                 self._cache.move_to_end(session_id)
-                while len(self._cache) > self._cache_size:
-                    self._cache.popitem(last=False)
+                self._evict()
         finally:
             with self._lock:
                 self._in_flight.pop(key).set()
-        return session, ref.mtime
+        return analysed
+
+    def release_held(self) -> None:
+        """Announce every session served from an older analysis once it may be analysed again."""
+        now = self._clock()
+        with self._lock:
+            due = [
+                session_id
+                for session_id in self._held
+                if (cached := self._cache.get(session_id)) is None
+                or now - cached.analysed_at >= self._reanalysis_interval_s
+            ]
+            self._held.difference_update(due)
+            due = [session_id for session_id in due if session_id in self._rows]
+        self._emit([RegistryEvent(kind=EventKind.UPDATED, session_id=session_id) for session_id in sorted(due)])
+
+    def _evict(self) -> None:
+        """Drop the least recently used analyses beyond `cache_size`, or beyond `cache_bytes` except the newest one.
+
+        The lock must be held.
+        """
+        while len(self._cache) > self._cache_size or (
+            len(self._cache) > 1 and sum(entry.source_bytes for entry in self._cache.values()) > self._cache_bytes
+        ):
+            self._cache.popitem(last=False)
 
     def resolve(self, text: str) -> str:
         """Turn a CLI argument into a session id: `<agent>:<id>`, an unambiguous bare id, or a session file path.
@@ -297,6 +381,7 @@ class Registry:
                 if time.monotonic() >= next_refresh:
                     next_refresh = time.monotonic() + interval_s
                     self.refresh()
+                self.release_held()
                 if not self.step():
                     self._stop.wait(max(0.0, next_refresh - time.monotonic()))
             except Exception:  # noqa: BLE001 - the worker must outlive any single failure

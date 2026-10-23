@@ -8,7 +8,8 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
-from agentprof.model import TranscriptBlock
+from agentprof.adapters.common import MalformedLines, iter_jsonl
+from agentprof.model import MalformedLineDetail, TranscriptBlock
 
 
 @dataclass(frozen=True)
@@ -81,6 +82,7 @@ class DebugLog:
     response_records: list[DebugResponseRecord] = field(default_factory=list)
     history_records: list[DebugHistoryRecord] = field(default_factory=list)
     malformed_lines: int = 0
+    malformed_line_details: list[MalformedLineDetail] = field(default_factory=list)
 
 
 def _count(attrs: dict[str, Any], key: str) -> int | None:
@@ -234,14 +236,14 @@ def load_debug_log_dir(directory: Path, root_session_id: str) -> DebugLog:
     """
     log = DebugLog()
     responses: dict[tuple[str | None, str], tuple[str, ...]] = {}
+    malformed = MalformedLines()
     for file_path in sorted(directory.glob("*.jsonl")):
         ordinal = 0
-        for source_position, line in enumerate(file_path.read_text().splitlines()):
-            if not line.strip():
-                continue
+        for line in iter_jsonl(file_path, malformed):
+            entry = line.value
+            source_position = line.number - 1
             history_record: DebugHistoryRecord | None = None
             try:
-                entry = json.loads(line)
                 if entry.get("type") not in ("llm_request", "agent_response"):
                     continue
                 sid = entry["sid"]
@@ -307,8 +309,8 @@ def load_debug_log_dir(directory: Path, root_session_id: str) -> DebugLog:
                         ),
                     )
                 call = _parse_call(entry, file_path.name, source_position, ordinal)
-            except (json.JSONDecodeError, AttributeError, KeyError, TypeError, ValueError):
-                log.malformed_lines += 1
+            except (AttributeError, KeyError, TypeError, ValueError) as error:
+                malformed.add(file_path, line.number, line.text, error)
                 if history_record is not None:
                     log.history.setdefault(history_record.owner_id, {})[history_record.request_id] = (
                         history_record.messages
@@ -330,4 +332,6 @@ def load_debug_log_dir(directory: Path, root_session_id: str) -> DebugLog:
             else call
             for call in calls
         ]
+    log.malformed_lines = malformed.count
+    log.malformed_line_details = malformed.details
     return log

@@ -81,6 +81,13 @@ uv run ty check .         # type check
 
 Always run `uv run qa` after changes and confirm zero failures before claiming work is complete.
 
+### Benchmark
+
+```sh
+uv run bench              # generate a 50 MB Claude Code session and measure summarize, analyse and API latency
+uv run bench --size-mb 5  # a quicker run
+```
+
 ### Distribution
 
 ```sh

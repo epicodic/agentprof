@@ -9,6 +9,7 @@ dependencies = []
 qa = "agentprof_qa:main"
 build-dist = "agentprof_qa.build_dist:main"
 smoke = "agentprof_qa.smoke:main"
+bench = "agentprof_qa.bench:main"
 
 [build-system]
 requires = ["uv_build>=0.11.6,<0.12"]

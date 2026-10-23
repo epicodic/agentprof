@@ -18,7 +18,7 @@ For the frontend's structure, data layer and tests, see [the architecture page](
 
 ## Session view
 
-`components/SessionView.tsx` owns the view state; `NodeDrawer` and its tables render the details.
+`components/SessionView.tsx` owns the view state and composes it from the hooks in `hooks/`; `NodeDrawer` and its tables render the details.
 
 - `SessionPage` keys `SessionView` by session id, so a refetch keeps expansion, selection and zoom.
 - `SessionHeader` shows title, badges, the findings switch and button, and headline figures.

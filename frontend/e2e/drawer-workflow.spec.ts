@@ -3,11 +3,12 @@
 
 import { expect, test } from "@playwright/test";
 import { served } from "../src/test/served";
+import { saveScreenshot } from "./helpers/screenshots";
 
 const SESSION = "claude-code:11111111-1111-4111-8111-111111111111";
 
 for (const width of [1280, 390]) {
-  test(`merged drawer layout and synchronized charts at ${width}px`, async ({ page }, testInfo) => {
+  test(`merged drawer layout and synchronized charts at ${width}px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 900 });
     await page.goto(`/sessions/${encodeURIComponent(SESSION)}?node=u1`);
     const dialog = page.getByRole("dialog");
@@ -87,7 +88,7 @@ for (const width of [1280, 390]) {
     await panel.getByTestId("workflow-children").locator("summary").first().click();
     await panel.getByTestId("workflow-calls").locator("summary").click();
     await expect(panel.getByRole("button", { name: "Expand LLM call 1", exact: true })).toBeVisible();
-    await page.screenshot({ path: testInfo.outputPath("workflow.png"), fullPage: true });
+    await saveScreenshot(page, "workflow.png", { fullPage: true });
   });
 }
 

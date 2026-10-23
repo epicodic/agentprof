@@ -17,7 +17,8 @@ src/agentprof/
   adapters/
     base.py               # AgentAdapter protocol, SessionRef, SessionSummary, AdapterConfig
     __init__.py           # load_adapters(): instantiate entry points of group `agentprof.adapters`
-    turns.py, timestamps.py, execution.py  # helpers shared by adapters
+    common.py             # iter_jsonl and malformed-line details, first_line, title_from_prompts
+    turns.py, timestamps.py, execution.py  # more helpers shared by adapters
     claude_code/          # ~/.claude/projects/<project>/<sid>.jsonl + subagents/
     codex/                # ~/.codex/sessions: grouped rollout JSONL files + subagents
     copilot_vscode/       # VS Code workspaceStorage: session + transcript + debug log
@@ -33,10 +34,11 @@ src/agentprof/
     agent_summary.py      # one row per logical agent for `/summary` and `SessionOut.agents`
     activity.py           # running/waiting state per node
     finding_order.py      # findings order and `Finding.rank`
+    session_index.py      # node, parent and entry lookups and a memo per analysed session
     transcripts.py        # transcript scoping, ordering, paging and search
   server/
     app.py                # FastAPI app, SSE broadcaster, static file serving
-    schemas.py            # response models + mapping from the neutral model
+    schemas.py            # response models; mirror models validate from the neutral model
     transcript_schema.py  # transcript response models
     pricing_schema.py     # price-table response model
     openapi.py            # dumps the OpenAPI schema for frontend type generation
@@ -45,11 +47,12 @@ frontend/src/
   api/                    # fetch client, query hooks, SSE handling, generated schema.ts
   pages/                  # SessionListPage (/), SessionPage (/sessions/:id)
   components/             # React components; see "Frontend" below
+  hooks/                  # session-view state: split, follow latest, history, reveals, navigation, scope, remembered state
   lib/                    # pure logic with unit tests; see "Frontend" below
   test/                   # test data factories and workflow fixtures
 frontend/e2e/             # Playwright specs
 tests/                    # pytest, mirrors src/; adapter fixtures under tests/adapters/*/fixtures
-tools/qa/                 # dev-only package: `qa`, `build-dist`, `smoke`
+tools/qa/                 # dev-only package: `qa`, `build-dist`, `smoke`, `bench`
 docs/                     # architecture, session view, coding conventions, releasing
 ```
 
@@ -74,9 +77,13 @@ flowchart LR
 Keep these boundaries:
 
 - `model.py` depends on nothing; everything else depends on it.
-- Adapters know nothing about each other, the registry or the server.
+- `pricing.py` depends only on the model; adapters use it for cost estimates and the server for the price-table response.
+- Adapters know nothing about each other, the registry, the analysis layer or the server.
 - The analysis layer sees only the neutral model, never native tool ids or file formats.
-- The server only translates the neutral model into response schemas.
+  The one exception is `analysis/pipeline.py`, which imports the `AgentAdapter` protocol and `SessionRef` from `adapters/base.py` to call `adapter.analyze`.
+- The server never touches adapters.
+  It reads sessions from the registry, calls read-only analysis helpers (`agent_summary`, `finding_order`, `activity`, `transcripts`, `session_index`) and translates the neutral model into response schemas.
+- `cli.py` is the composition root: it wires adapters, registry, pricing and server.
 - The frontend sees only the API; its types are generated from the OpenAPI schema.
 
 ## Components
@@ -136,7 +143,7 @@ An adapter implements the `AgentAdapter` protocol in `adapters/base.py`:
 |---|---|---|
 | `discover()` | cheap | list `SessionRef`s (id, path, newest mtime of all the session's files) |
 | `open_path(path)` | cheap | recognise a file given on the command line, else `None` |
-| `summarize(ref)` | full parse | `SessionSummary` for the list row (title, workspace, times, total cost) |
+| `summarize(ref)` | parse without transcript bodies | `SessionSummary` for the list row (title, workspace, times, total cost) |
 | `analyze(ref)` | full | complete `Session` tree with raw metrics |
 
 Rules for all adapters:
@@ -146,6 +153,9 @@ Rules for all adapters:
 - Adapters set only what they know; the roll-up derives the rest.
 - Missing or ambiguous source data stays `n/a` or unresolved, never a guessed zero.
 - Parse problems go into `Session.diagnostics` instead of raising, unless the session is unreadable.
+- Read JSONL files with `common.iter_jsonl`; it records undecodable lines, and a parser records lines it cannot process with `MalformedLines.add`, so every adapter reports malformed-line details.
+- Keep each per-record ownership decision in a pure function with a table-driven test (`copilot_vscode/ownership.decide_owner`, `codex/rollout.decide_record_owner`, `claude_code/tree._tool_event_owner`); a new `ownership_evidence` value gets its own test row.
+- `summarize` skips transcript retention (`retain_native=False` in the Claude Code and Codex parsers); only `analyze` builds transcript entries.
 - `summarize` and `analyze` must report the same total cost; `tests/test_adapter_contract.py` checks this.
 
 Agent specifics:
@@ -192,14 +202,17 @@ Findings:
 - A row's state (`pending`, `summarized`, `error`) is relative to the session's current mtime, so a changed file makes it stale.
 - A daemon thread re-runs `discover` every 3 s and summarises one pending row per `step()`, newest first.
 - The worker never analyses.
-- `session(id)` analyses on demand, deduplicates concurrent requests and keeps an LRU cache of 20 sessions keyed by mtime.
+- `analysed(id)` analyses on demand, deduplicates concurrent requests and caches `AnalysedSession`s (session, mtime, `SessionIndex`) keyed by mtime; `session(id)` returns the session and mtime only.
+- The cache keeps at most 20 analyses and, beyond the most recent one, at most 256 MiB of their source files.
+- With `reanalysis_interval_s` (10 s in the app, 0 by default), a session that changed within that interval of its last analysis gets the previous analysis; `release_held()`, called by the worker, announces it again once it may be re-analysed.
 - A failed analysis is remembered for the file version it failed on.
+- A session file given on the command line outside the adapter roots becomes a pinned row; `refresh` reopens it with `open_path` while it is not discovered.
 - Every row change emits a `RegistryEvent` (`updated` or `removed`).
 - All public methods are thread-safe behind one `RLock`.
 
 ### Server (`server/`)
 
-`create_app(registry, pricing=...)` builds the FastAPI app:
+`create_app(registry, pricing=..., allowed_hosts=...)` builds the FastAPI app:
 
 | Endpoint | Returns |
 |---|---|
@@ -224,6 +237,7 @@ Behaviour:
 - Transcript bodies appear only in the entry endpoint, never in tree, list or SSE responses.
 - Transcript cursors are bound to session, scope, query and filter; a vanished cursor entry returns 409.
 - Without `node_id`, transcript listing and search cover the whole session; with it, the node's ownership scope.
+- Routes look up nodes and transcript entries through the cached `SessionIndex`; `scope_entries` memoises each scope's ordered entries on it.
 - The `Broadcaster` moves registry events from the worker thread onto the asyncio loop, one queue per SSE client.
 - `schemas.py` builds the `depth`/`fields` projection; `app.py` maps its `ValueError` to 422.
 - `SessionOut.agents` embeds the same rows as `/summary`.
@@ -236,6 +250,8 @@ Behaviour:
 - `pnpm --dir frontend build` writes the bundle into `src/agentprof/server/static/`, which ships in the wheel.
 - `pnpm --dir frontend dev` proxies `/api` to a running `agentprof` on port 8765.
 - Put new logic in `lib/` as pure, tested functions; keep components to layout and wiring.
+- `SessionView` composes its state from hooks in `hooks/`; each hook's decisions live in a pure, unit-tested module in `lib/` (`treeReveal`, `followLatest`, `historyRestoration`, `destinationSequence`, `transcriptPosition`).
+- New session-view state goes into the hook it belongs to, with its decisions in a `lib/` function and a Vitest test; the Playwright specs cover the wiring.
 
 ```
 main.tsx          MantineProvider -> QueryClientProvider -> BrowserRouter -> App
@@ -245,7 +261,9 @@ pages/
   SessionPage       loads one session, renders SessionView
 components/
   session workspace
-    SessionView         inspection, selection, scope, follow mode, history and split-pane state
+    SessionView         composes the hooks for inspection, selection, scope, follow mode, history and split-pane state
+    SessionWorkspace    resizable tree pane, splitter and collapsible agent-summary pane
+    SessionStatusMessages  polite messages above the workspace
     SessionInteraction  shared interaction context and inspection memory
     SessionHeader       title, badges, headline figures, diagnostics
     WorkflowToolbar     scope, activity filter and follow-latest controls
@@ -289,6 +307,7 @@ lib/                pure functions, no React
   executionSequence, toolExecutions, inspectionSequence, llmCallRows, eventRelations   call sequence
   timeline, drawerTimeDomain, chartScale, context, cost, cache   chart geometry and figures
   agentColor, metricColor, artifacts, transcript, localMarks, entityHitGroups
+  treeReveal, followLatest, historyRestoration, destinationSequence, transcriptPosition   session-view hook decisions
   filters, paging, splitPane, format, severity
 api/                client, query hooks, SSE, types
 ```
@@ -329,7 +348,9 @@ api/                client, query hooks, SSE, types
 
 - Usage: `agentprof [SESSION|PATH] [--host] [--port] [--no-browser] [--copilot-root] [--claude-root] [--codex-root] [--pricing]`.
 - Loads the price table once and shares it with all adapters and the server.
-- Loads adapters, runs one `registry.refresh()` and resolves the optional argument (exit code 2 if unknown or ambiguous).
+- Loads adapters, runs one `registry.refresh()` and resolves the optional argument.
+- Exits with code 2 for an invalid price table, an unknown or ambiguous argument, or a port that cannot be bound.
+- Warns on stderr when it binds a non-loopback host.
 - Starts the worker thread and uvicorn.
 - Opens the browser once the server accepts connections.
 
@@ -358,9 +379,9 @@ registry event -> Broadcaster -> SSE "updated"/"removed" -> api/events.ts -> que
 
 ```
 browser GET /api/sessions/{id}
-  -> registry.session(id)                     cache hit by mtime, or:
+  -> registry.analysed(id)                    cache hit by mtime, or:
        pipeline.analyze(adapter, ref)         adapter.analyze -> call keys -> resolve links -> roll_up -> call context -> findings
-       cache (LRU 20)
+       cache (LRU, 20 sessions / 256 MiB source)
   -> session_out(session, mtime) -> SessionOut
 node selected -> GET .../nodes/{node_id} -> prompt, result, arguments
 Content tab -> GET .../transcript, .../transcript/search, .../transcript/entries/{entry_id}
@@ -372,6 +393,7 @@ file changes -> worker emits "updated" with newer mtime -> frontend refetches th
 ### Add an agent adapter
 
 1. Create `adapters/<name>/` with the usual split (`discovery`, parsers, `tools`, `tree`, `adapter`).
+   Use `adapters/common.py` for JSONL reading and titles.
 2. Implement the four protocol methods; `name` becomes the id prefix `<name>:<native-id>`.
 3. Include every file the session depends on in `SessionRef.mtime` (use `latest_mtime`).
 4. Map every native tool id in `tools.py`; unknown ids map to `other` and are counted in diagnostics.
@@ -395,7 +417,10 @@ file changes -> worker emits "updated" with newer mtime -> frontend refetches th
 
 ### Change the API
 
-1. Change the model and its mapping in `server/schemas.py` (transcripts: `server/transcript_schema.py`).
+1. Change the response model in `server/schemas.py` (transcripts: `server/transcript_schema.py`).
+   A model that mirrors a neutral-model dataclass inherits `_FromModel` and needs no mapping code: give it the same field names and Pydantic reads them from the object.
+   Write explicit mapping code only where the API differs, as in `node_out`, `summary_out` and the transcript responses.
+   Shared `Literal`s live in `model.py`.
 2. Run `pnpm --dir frontend gen:api` and commit `frontend/src/api/schema.ts`; CI checks that it is current.
 3. Update `frontend/src/test/factories.ts` if test data changes shape.
 

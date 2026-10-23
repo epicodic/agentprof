@@ -1,12 +1,29 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 epicodic
 
-import { expect, type Locator, test } from "@playwright/test";
+import { type BrowserContext, expect, type Locator, type Page, test } from "@playwright/test";
 import { served } from "../src/test/served";
 import { assertNoSelectionActionControls } from "./helpers/workflowFixture";
 
 const SESSION = "claude-code:11111111-1111-4111-8111-111111111111";
 const sessionUrl = `/sessions/${encodeURIComponent(SESSION)}`;
+
+/**
+ * Ctrl+click `link` and return the tab it opens.
+ * Headless Chromium occasionally drops a modified click on a link that the app leaves to the browser; the app must not
+ * have handled the dropped click either, so the current page keeps its URL before the click is retried.
+ * A tab from a dropped attempt that opens late is closed with the browser context at the end of the test.
+ */
+async function openInNewTab(page: Page, context: BrowserContext, link: Locator): Promise<Page> {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const opened = context.waitForEvent("page", { timeout: 3000 }).catch(() => null);
+    await link.click({ modifiers: ["Control"] });
+    const tab = await opened;
+    if (tab !== null) return tab;
+    await expect(page).toHaveURL(sessionUrl);
+  }
+  throw new Error("a modified click opened no tab in three attempts");
+}
 
 async function openDisclosure(disclosure: Locator): Promise<void> {
   if ((await disclosure.getAttribute("open")) === null) await disclosure.locator("summary").click();
@@ -124,10 +141,11 @@ test("caption Enter and modified clicks keep their native URL at phone and deskt
     await assertNoSelectionActionControls(page);
     await expect(page.getByRole("dialog")).toHaveCount(0);
 
-    const modifiedPagePromise = context.waitForEvent("page", { timeout: 5000 });
-    await caption.click({ modifiers: ["Control"] });
-    const modifiedPage = await modifiedPagePromise;
-    await expect(modifiedPage).toHaveURL(new URL(href ?? "", page.url()).href);
+    const modifiedPage = await openInNewTab(page, context, caption);
+    // A background tab may load slowly; its committed URL is what the modified click must produce.
+    const nativeUrl = new URL(href ?? "", page.url()).href;
+    await modifiedPage.waitForURL(nativeUrl, { waitUntil: "commit" });
+    expect(modifiedPage.url()).toBe(nativeUrl);
     await expect(page).toHaveURL(sessionUrl);
     await expect(page.getByRole("dialog")).toHaveCount(0);
     await expect(row).toHaveAttribute("data-selection", "none");

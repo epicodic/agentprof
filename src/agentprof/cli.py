@@ -19,7 +19,7 @@ from fastapi import FastAPI
 from agentprof.adapters import load_adapters
 from agentprof.adapters.base import AdapterConfig
 from agentprof.pricing import PriceTable
-from agentprof.registry import Registry
+from agentprof.registry import LIVE_REANALYSIS_INTERVAL_S, Registry
 from agentprof.server.app import create_app
 
 _DEFAULT_HOST = "127.0.0.1"
@@ -120,7 +120,9 @@ def main(
     args = build_parser().parse_args(argv)
     try:
         pricing = PriceTable.load(args.pricing)
-        registry = Registry(load_adapters(adapter_config(args, pricing)))
+        registry = Registry(
+            load_adapters(adapter_config(args, pricing)), reanalysis_interval_s=LIVE_REANALYSIS_INTERVAL_S
+        )
     except (OSError, ValueError) as error:  # e.g. an unreadable or invalid --pricing file
         print(f"error: {error}", file=sys.stderr)
         return 2

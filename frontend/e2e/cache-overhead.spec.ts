@@ -14,6 +14,7 @@ import {
   tokens,
 } from "../src/test/factories";
 import { served } from "../src/test/served";
+import { saveScreenshot } from "./helpers/screenshots";
 import { assertNoSelectionActionControls, installDeepWorkflow, WORKFLOW_SESSION } from "./helpers/workflowFixture";
 import { workflowStream } from "./helpers/workflowStream";
 
@@ -111,9 +112,7 @@ for (const viewport of [
     await expect(dialog.getByTestId("cache-analysis")).toContainText("5m");
     await expect(dialog.getByTestId("cache-analysis")).toContainText("1h");
     await dialog.getByTestId("cache-analysis").getByRole("heading").scrollIntoViewIfNeeded();
-    await dialog
-      .getByTestId("cache-analysis")
-      .screenshot({ path: test.info().outputPath(`cache-overview-${viewport.width}.png`) });
+    await saveScreenshot(dialog.getByTestId("cache-analysis"), `cache-overview-${viewport.width}.png`);
     await expect(dialog.getByTestId("cache-value-cache_write_total-own")).toHaveCSS("white-space", "nowrap");
     await dialog.getByRole("button", { name: "Expand E1 findings" }).click();
     const rewrite = dialog.getByTestId("finding-group-E1");
@@ -253,7 +252,7 @@ for (const agent of ["claude-code", "codex", "copilot-vscode"] as const) {
         await expect(section.getByRole("row").filter({ hasText: "5m" }).first()).toContainText("500");
       }
       await section.getByRole("heading").scrollIntoViewIfNeeded();
-      await page.screenshot({ path: test.info().outputPath(`cache-${agent}-${viewport.width}.png`) });
+      await saveScreenshot(page, `cache-${agent}-${viewport.width}.png`);
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     });
   }

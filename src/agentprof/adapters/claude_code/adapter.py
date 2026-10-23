@@ -19,9 +19,9 @@ from agentprof.adapters.claude_code.prompts import NO_PROMPT, prompt_topic
 from agentprof.adapters.claude_code.tools import is_known_tool_id
 from agentprof.adapters.claude_code.transcript import Transcript, load_transcript
 from agentprof.adapters.claude_code.tree import build_root, message_cost
+from agentprof.adapters.common import title_from_prompts
 from agentprof.model import Diagnostics, Session, sum_costs
 
-_TITLE_LENGTH = 80
 _SNIFF_LINES = 20
 _SUBAGENT_DIR = "subagents"
 
@@ -29,11 +29,12 @@ _SUBAGENT_DIR = "subagents"
 def _title(main: Transcript, fallback: str) -> str:
     if main.title:
         return main.title
-    for prompt in main.prompts:
-        topic = prompt_topic(prompt.text)
-        if topic != NO_PROMPT:
-            return topic[:_TITLE_LENGTH]
-    return fallback
+    return title_from_prompts((prompt.text for prompt in main.prompts), fallback, topic=_prompt_title)
+
+
+def _prompt_title(text: str) -> str:
+    topic = prompt_topic(text)
+    return "" if topic == NO_PROMPT else topic
 
 
 def _looks_like_session(path: Path) -> bool:
@@ -76,8 +77,8 @@ class ClaudeCodeAdapter:
         return self._ref(path) if _looks_like_session(path) else None
 
     def summarize(self, ref: SessionRef) -> SessionSummary:
-        main = load_transcript(ref.path)
-        transcripts = [main, *(subagent.transcript for subagent in load_subagents(ref.path))]
+        main = load_transcript(ref.path, retain_native=False)
+        transcripts = [main, *(subagent.transcript for subagent in load_subagents(ref.path, retain_native=False))]
         return SessionSummary(
             id=ref.id,
             agent=self.name,

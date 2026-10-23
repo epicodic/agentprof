@@ -2,6 +2,7 @@
 # Copyright (c) 2026 epicodic
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 from agentprof.adapters.claude_code.transcript import load_transcript
@@ -250,3 +251,22 @@ def test_load_transcript_keeps_request_and_result_sequence_across_split_message(
         [(link.source_request_id, link.relation) for link in event.links][-1] == ("m2", "next_observed_call")
         for event in result_events
     )
+
+
+def test_load_transcript_without_native_records_keeps_everything_else() -> None:
+    full = load_transcript(_MAIN)
+    light = load_transcript(_MAIN, retain_native=False)
+
+    assert full.native_records
+    assert light.native_records == []
+    assert light == replace(full, native_records=[])
+
+
+def test_a_line_that_is_not_utf8_counts_as_malformed(tmp_path: Path) -> None:
+    path = tmp_path / "s.jsonl"
+    path.write_bytes(b"\xff\xfe\n")
+
+    transcript = load_transcript(path)
+
+    assert transcript.malformed_lines == 1
+    assert transcript.malformed_line_details[0].line_number == 1

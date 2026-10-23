@@ -978,10 +978,10 @@ test("preserves malformed selection parameters through tab changes and clears th
   await page.getByRole("button", { name: "Close details" }).click();
   params = new URLSearchParams(new URL(page.url()).search);
   expect(params.get("sel")).toBe("broken");
+  await expect(page.getByRole("dialog")).toHaveCount(0);
   await page.keyboard.press("Escape");
-  params = new URLSearchParams(new URL(page.url()).search);
-  expect(params.get("sel")).toBe("broken");
-  expect(params.get("entity")).toBe("kept");
+  await expect.poll(() => new URL(page.url()).searchParams.get("sel")).toBeNull();
+  expect(new URL(page.url()).searchParams.get("entity")).toBeNull();
 });
 
 test("selects and opens a call from the calls panel and keeps turn cost ownership", async ({ page }) => {

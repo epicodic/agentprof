@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from agentprof.analysis.finding_references import call_references, node_reference
+from agentprof.analysis.session_index import SessionIndex
 from agentprof.model import (
     ExecutionEvent,
     FindingReference,
@@ -19,7 +20,6 @@ from agentprof.model import (
     NodeKind,
     TranscriptCoverage,
     TranscriptEntry,
-    iter_nodes,
 )
 
 _PREVIEW_LIMIT = 240
@@ -49,23 +49,34 @@ class TranscriptPage:
 
 
 def scope_entries(
-    root: Node,
+    index: SessionIndex,
     node_id: str | None = None,
     *,
     call_key: str | None = None,
     event_id: str | None = None,
 ) -> list[TranscriptEntry]:
-    """Select entries visible in a session, root, turn, agent or tool invocation scope."""
+    """Select entries visible in a session, root, turn, agent or tool invocation scope, in transcript order.
+
+    The result is memoised on `index` per scope, so callers must not change it.
+    """
     if call_key is not None and event_id is not None:
         raise ValueError("call_key and event_id are mutually exclusive")
-    nodes = list(iter_nodes(root))
-    selected, invocation_keys = _scope_nodes(root, node_id)
+    return index.memo(
+        ("scope_entries", node_id, call_key, event_id),
+        lambda: _scope_entries(index, node_id, call_key, event_id),
+    )
+
+
+def _scope_entries(
+    index: SessionIndex, node_id: str | None, call_key: str | None, event_id: str | None
+) -> list[TranscriptEntry]:
+    selected, invocation_keys = _scope_nodes(index, node_id)
     entries = [entry for node in selected if node is not None for entry in node.transcript_entries]
-    if node_id is not None and any(node.node_id == node_id and node.kind is NodeKind.TOOL for node in nodes):
+    if node_id is not None and index.nodes_with_id(node_id)[0].kind is NodeKind.TOOL:
         entries = [entry for entry in entries if entry.invocation_id in invocation_keys]
     references_by_entry: dict[int, list[FindingReference]] = {}
     if call_key is not None or event_id is not None:
-        references_by_entry = _supporting_reference_index(root, entries)
+        references_by_entry = _supporting_reference_index(index, entries)
     if call_key is not None:
         entries = [
             entry
@@ -87,16 +98,15 @@ def scope_entries(
     return ordered_entries(entries)
 
 
-def _scope_nodes(root: Node, node_id: str | None) -> tuple[list[Node], set[str]]:
-    nodes = list(iter_nodes(root))
+def _scope_nodes(index: SessionIndex, node_id: str | None) -> tuple[list[Node], set[str]]:
     if node_id is None:
-        return nodes, set()
-    owners = [node for node in nodes if node.node_id == node_id]
+        return index.nodes, set()
+    owners = index.nodes_with_id(node_id)
     if len(owners) != 1:
         raise KeyError(node_id)
     owner = owners[0]
     if owner.kind is NodeKind.TOOL:
-        parent = next((node for node in nodes if owner in node.children), None)
+        parent = index.parent(owner)
         return ([parent] if parent is not None else []), {owner.node_id}
     if owner.kind is NodeKind.TURN:
         return [owner], set()
@@ -105,9 +115,9 @@ def _scope_nodes(root: Node, node_id: str | None) -> tuple[list[Node], set[str]]
     return [owner, *_owned_turns(owner)], set()
 
 
-def scope_coverage(root: Node, node_id: str | None = None) -> TranscriptCoverage:
+def scope_coverage(index: SessionIndex, node_id: str | None = None) -> TranscriptCoverage:
     """Coverage reported by nodes included in the selected scope."""
-    nodes, _ = _scope_nodes(root, node_id)
+    nodes, _ = _scope_nodes(index, node_id)
     return transcript_coverage(nodes)
 
 
@@ -213,12 +223,15 @@ def preview(entry: TranscriptEntry) -> str | None:
 
 
 def search_entries(entries: list[TranscriptEntry], query: str) -> list[TranscriptHit]:
-    """Find a literal case-insensitive phrase in recorded text or serialized readable structured data."""
+    """Find a literal case-insensitive phrase in recorded text or serialized readable structured data.
+
+    `entries` must be in transcript order, as `scope_entries` returns them; hits keep that order.
+    """
     needle = query.casefold()
     if not needle.strip():
         raise ValueError("query must not be blank")
     hits: list[TranscriptHit] = []
-    for entry in ordered_entries(entries):
+    for entry in entries:
         for position, block in enumerate(entry.blocks):
             candidates: list[str] = []
             if block.availability in {"recorded", "truncated"} and block.text is not None:
@@ -260,9 +273,9 @@ def _snippet(text: str, needle: str) -> str:
     return ("…" if left else "") + snippet + ("…" if right < len(text) else "")
 
 
-def supporting_references(root: Node, entry: TranscriptEntry) -> list[FindingReference]:
+def supporting_references(index: SessionIndex, entry: TranscriptEntry) -> list[FindingReference]:
     """Resolve only unique exact IDs on the owning logical agent stream."""
-    return _supporting_reference_index(root, [entry])[id(entry)]
+    return _supporting_reference_index(index, [entry])[id(entry)]
 
 
 @dataclass
@@ -273,15 +286,14 @@ class _OwnerReferenceLookup:
     tools_by_id: dict[str, list[Node]]
 
 
-def _supporting_reference_index(root: Node, entries: list[TranscriptEntry]) -> dict[int, list[FindingReference]]:
+def _supporting_reference_index(
+    index: SessionIndex, entries: list[TranscriptEntry]
+) -> dict[int, list[FindingReference]]:
     """Index tree identities and each referenced owner once for a transcript selection."""
-    nodes: dict[str, list[Node]] = {}
-    for node in iter_nodes(root):
-        nodes.setdefault(node.node_id, []).append(node)
     owner_lookups: dict[str, _OwnerReferenceLookup] = {}
     references_by_entry: dict[int, list[FindingReference]] = {}
     for entry in entries:
-        owners = nodes.get(entry.owner_id, [])
+        owners = index.nodes_with_id(entry.owner_id)
         if len(owners) != 1:
             references_by_entry[id(entry)] = []
             continue
@@ -310,7 +322,7 @@ def _supporting_reference_index(root: Node, entries: list[TranscriptEntry]) -> d
             if len(events) == 1 and events[0].source_stream_id in event_streams:
                 references.append(FindingReference("event", owner.node_id, entry.event_id, events[0].kind))
         if entry.subject_node_id is not None:
-            subjects = nodes.get(entry.subject_node_id, [])
+            subjects = index.nodes_with_id(entry.subject_node_id)
             if len(subjects) == 1:
                 references.append(node_reference(subjects[0]))
         references_by_entry[id(entry)] = list(
@@ -401,8 +413,11 @@ def page_entries(
     after: str | None = None,
     anchor: str | None = None,
 ) -> TranscriptPage:
-    """Return a bounded page or centered anchor context with stable previous and next cursors."""
-    ordered = ordered_entries(entries)
+    """Return a bounded page or centered anchor context with stable previous and next cursors.
+
+    `entries` must be in transcript order, as `scope_entries` and `search_entries` return them.
+    """
+    ordered = entries
     ids = [entry.entry_id for entry in ordered]
     anchor_index: int | None = None
     if anchor is not None:
